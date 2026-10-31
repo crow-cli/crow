@@ -1,0 +1,24 @@
+# Rust
+target/
+
+# web workspace (bun): node_modules everywhere; the vendored aui dists ARE
+# the source of truth for packages/aui, so they stay tracked
+node_modules/
+!packages/aui/*/dist/
+!packages/aui/*/dist/**
+
+# vendored VSCodium pipeline (packages/crow-gui). Its build/ directory is
+# packaging SOURCE — linux/osx/windows package scripts — not an artifact.
+!packages/crow-gui/vscodium/build/
+packages/crow-gui/vscodium/.build/
+packages/crow-gui/.build/
+packages/crow-gui/vscodium/vscode/
+packages/crow-gui/vscodium/assets/
+packages/crow-gui/vscodium/VSCode-*/
+packages/crow-gui/vscodium/vscode-reh*/
+
+# the chat extension's bundle, built by build.sh with bun
+packages/vscode-acp/dist/
+packages/chat/dist/
+
+*.log
