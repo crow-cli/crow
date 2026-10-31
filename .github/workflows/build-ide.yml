@@ -129,14 +129,26 @@ jobs:
             libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev \
             fakeroot dpkg-dev rpm jq unzip
 
-      - name: Check Windows build dependencies
+      - name: Install Windows build dependencies
         if: runner.os == 'Windows'
         run: |
-          # 7z is used by build/windows/prepare_assets.sh, jq by the pipeline's
-          # product.json edits. Both ship with the windows-2022 image; fail
-          # loudly here instead of deep inside a package step.
-          for tool in 7z jq unzip; do
-            command -v "${tool}" >/dev/null || echo "::warning::${tool} not on PATH"
+          # jq edits product.json (prepare_vscode.sh), unzip unpacks the bundled
+          # vsixs (bundle-exts.sh) and 7z builds the release zip
+          # (build/windows/prepare_assets.sh). 7z ships with the image; jq and
+          # unzip are installed here if it does not, rather than failing an hour
+          # into the build.
+          for tool in jq unzip 7z; do
+            if command -v "${tool}" >/dev/null 2>&1; then
+              continue
+            fi
+            case "${tool}" in
+              7z) choco install -y --no-progress 7zip ;;
+              *)  choco install -y --no-progress "${tool}" ;;
+            esac
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "::error::${tool} missing and could not be installed"
+              exit 1
+            fi
           done
 
       - uses: actions/setup-node@v4
