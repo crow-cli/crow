@@ -204,7 +204,12 @@ jobs:
           else
             APP_DIR="${APP_DIR}/resources/app"
           fi
-          test -f "${APP_DIR}/out/vs/code/electron-main/main.js"
+          # A packaged build has sources bundled: out/main.js is the Electron
+          # main process, out/vs/workbench/workbench.desktop.main.js the
+          # workbench (there is no out/vs/code/electron-main/ in a packaged
+          # tree — that path only exists in a dev checkout).
+          test -f "${APP_DIR}/out/main.js"
+          test -f "${APP_DIR}/out/vs/workbench/workbench.desktop.main.js"
           test -d "${APP_DIR}/extensions/crow-acp"
           test -d "${APP_DIR}/extensions/ms-python.python"
           node -e '
