@@ -75,8 +75,8 @@ Flags: `--arch arm64`, `--os linux|osx|windows` (default linux), `--no-web`,
 `--reh` (also build the remote/ssh server), `--latest` (newest upstream instead
 of the pin), `--assets` (roll the release artifacts into `vscodium/assets/`),
 `--deb` (`vscodium/assets/crow_<version>_amd64.deb`), `--rpm`
-(`crow-<version>.x86_64.rpm`), `--msi` (windows only, off by default — see
-*Not done yet*), `--prepare-only` (fetch + patch + `npm ci`, stop before gulp —
+(`crow-<version>.x86_64.rpm`), `--no-msi` (windows: skip the WiX `.msi`, which
+is built by default), `--prepare-only` (fetch + patch + `npm ci`, stop before gulp —
 the fast way to check that every patch still applies), `--fresh` (delete
 `vscodium/vscode/` and start the checkout over).
 
@@ -86,7 +86,7 @@ the fast way to check that every patch still applies), `--fresh` (delete
 | --- | --- |
 | linux | `.tar.gz` of the app, `.deb` (`--deb`), `.rpm` (`--rpm`), reh + reh-web + CLI `.tar.gz` |
 | darwin | `.zip`, `.dmg`, reh + reh-web + CLI `.tar.gz` |
-| win32 | `.zip`, Inno system/user setup `.exe`, reh + reh-web (x64 only) + CLI `.tar.gz` |
+| win32 | `.zip`, Inno system/user setup `.exe`, the WiX `.msi` (system + updates-disabled), reh + reh-web (x64 only) + CLI `.tar.gz` |
 
 Asset names are lower-cased to `crow-…` by `build.sh` (the vendored packager
 keeps VSCodium's proper-noun casing, `CrowSetup-x64-…exe`), and every Linux and
@@ -336,10 +336,6 @@ which `apply_patch` substitutes from `crow.env` at apply time.
   the web build until it grows one.
 - The VS Code pin is 1.135.0; bumping it means re-running `vendor.sh` and
   fixing patch hunks.
-- **The Windows MSI is not built.** `build/windows/msi/*` is still
-  VSCodium-branded (`PRODUCT_NAME`, the upgrade code, `-dManufacturerName`), so a
-  crow MSI would install over a VSCodium install. `--msi` exists to opt in once
-  those are crow's; until then Windows ships the Inno system/user `.exe`s.
 - **No Windows arm64 / macOS universal build** — one arch per runner.
 - **Nothing is signed**: Windows installers need a code-signing certificate and
   macOS needs `CERTIFICATE_OSX_*` (p12 + Apple ID/team/password) for codesign,

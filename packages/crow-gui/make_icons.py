@@ -185,6 +185,41 @@ def write_letterpress() -> None:
         print(f"  {dest.relative_to(ROOT)}  {weight}")
 
 
+# The Windows installer art: Inno's wizard images (the .exe installers) and the
+# WiX banner/dialog (the .msi). icons/build_icons.sh documents VSCodium's own
+# recipe — white canvas, the mark at a fixed pixel size, centred — so these are
+# the same canvases with crow's mark on them. The +x+y placements are the two
+# WiX images, where the mark is NOT centred (banner: right edge; dialog: lower
+# left). 24-bit BMP is what both toolchains read.
+INNO_BIG = ((100, (164, 314), 126), (125, (192, 386), 147), (150, (246, 459), 190),
+            (175, (273, 556), 211), (200, (328, 604), 255), (225, (355, 700), 273),
+            (250, (410, 797), 317))
+INNO_SMALL = ((100, (55, 55), 44), (125, (64, 68), 52), (150, (83, 80), 63),
+              (175, (92, 97), 76), (200, (110, 106), 86), (225, (119, 123), 103),
+              (250, (138, 140), 116))
+WIX = (((493, 58), 50, (438, 6)), ((493, 312), 120, (22, 152)))
+
+
+def write_bmp(dest: Path, canvas: tuple[int, int], mark: int, at: tuple[int, int] | None) -> None:
+    img = Image.new("RGB", canvas, "white")
+    logo = tile().resize((mark, mark), Image.LANCZOS)
+    x, y = at if at else ((canvas[0] - mark) // 2, (canvas[1] - mark) // 2)
+    img.paste(logo, (x, y), logo)
+    img.save(dest)
+    print(f"  {dest.relative_to(ROOT)}  {canvas[0]}x{canvas[1]}, mark {mark}")
+
+
+def write_windows_installer_art() -> None:
+    for dpi, canvas, mark in INNO_BIG:
+        write_bmp(RES / "win32" / f"inno-big-{dpi}.bmp", canvas, mark, None)
+    for dpi, canvas, mark in INNO_SMALL:
+        write_bmp(RES / "win32" / f"inno-small-{dpi}.bmp", canvas, mark, None)
+    msi = ROOT / "vscodium" / "build" / "windows" / "msi" / "resources"
+    for quality in ("stable", "insider"):
+        for (canvas, mark, at), name in zip(WIX, ("wix-banner.bmp", "wix-dialog.bmp")):
+            write_bmp(msi / quality / name, canvas, mark, at)
+
+
 def main() -> int:
     if not (ART / "crow-logo.png").exists():
         print(f"missing {ART / 'crow-logo.png'}", file=sys.stderr)
@@ -208,6 +243,8 @@ def main() -> int:
     write_png(70, RES / "win32/code_70x70.png")
     # macOS: the .app icon (electron.ts darwinIcon).
     write_icns(RES / "darwin/code.icns")
+    # Windows installers: Inno wizard images + the WiX banner/dialog.
+    write_windows_installer_art()
     write_letterpress()
     return 0
 

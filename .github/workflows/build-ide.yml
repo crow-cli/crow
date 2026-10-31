@@ -10,9 +10,6 @@ name: Build IDE
 # also publish the artifacts to a release.
 #
 # Known gaps, in the order they should be closed:
-#   - Windows MSI: build/windows/msi/* is still VSCodium-branded (PRODUCT_NAME,
-#     upgrade code, WiX), so build.sh emits the Inno .exe installers only.
-#     Pass --msi once that is branded.
 #   - Windows arm64, macOS universal: one arch per runner.
 #   - Signing: macOS artifacts are unsigned without the CERTIFICATE_OSX_*
 #     secrets, and the .dmg is created by build.sh rather than the vendored
@@ -271,6 +268,7 @@ jobs:
             dist/*.zip
             dist/*.dmg
             dist/*.exe
+            dist/*.msi
             # one .sha256/.sha1 beside each Linux and macOS asset
             dist/*.sha256
             dist/*.sha1

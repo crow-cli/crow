@@ -11,8 +11,7 @@
 #   ./build.sh --assets       also roll release artifacts into vscodium/assets/
 #   ./build.sh --deb          also build the .deb (linux; needs fakeroot+dpkg-dev)
 #   ./build.sh --rpm          also build the .rpm (linux; needs rpm + rpmbuild)
-#   ./build.sh --msi          windows: also build the MSI (off by default —
-#                             build/windows/msi/* is still VSCodium-branded)
+#   ./build.sh --no-msi       windows: skip the MSI (built by default)
 #   ./build.sh --prepare-only fetch + patch + npm ci, stop before gulp
 #   ./build.sh --fresh        delete vscodium/vscode/ and start the checkout over
 #
@@ -30,8 +29,8 @@
 #              .tar.gz, a .sha256/.sha1 beside each file
 #     darwin   .zip, .dmg, reh + reh-web + cli .tar.gz, a .sha256/.sha1
 #              beside each file (unsigned without CERTIFICATE_OSX_*)
-#     win32    .zip, Inno system/user setup .exe, reh + reh-web (x64 only) and
-#              cli .tar.gz
+#     win32    .zip, Inno system/user setup .exe, the WiX .msi (system +
+#              updates-disabled), reh + reh-web (x64 only) and cli .tar.gz
 #
 # Every packaged tree also carries crow's bundled extensions as BUILT-INS: the
 # chat extension (built from ../vscode-acp with bun) and the Jupyter + Python
@@ -57,7 +56,7 @@ REH_WEB="yes"
 ASSETS="no"
 DEB="no"
 RPM="no"
-MSI="no"
+MSI="yes"
 PREPARE_ONLY="no"
 FRESH="no"
 
@@ -71,7 +70,7 @@ while [[ $# -gt 0 ]]; do
     --assets)       ASSETS="yes"; shift ;;
     --deb)          DEB="yes"; shift ;;
     --rpm)          RPM="yes"; shift ;;
-    --msi)          MSI="yes"; shift ;;
+    --no-msi)       MSI="no"; shift ;;
     --prepare-only) PREPARE_ONLY="yes"; shift ;;
     --fresh)        FRESH="yes"; shift ;;
     -h|--help)      awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
@@ -103,10 +102,6 @@ fi
 # Linux packages, and the Windows MSI, are built with host tools for this host.
 if [[ "${DEB}" == "yes" || "${RPM}" == "yes" ]] && [[ "${BUILD_OS}" != "linux" ]]; then
   echo "crow-gui: --deb/--rpm are linux-only (--os is ${BUILD_OS})" >&2
-  exit 2
-fi
-if [[ "${MSI}" == "yes" ]] && [[ "${BUILD_OS}" != "windows" ]]; then
-  echo "crow-gui: --msi is windows-only (--os is ${BUILD_OS})" >&2
   exit 2
 fi
 
@@ -287,9 +282,8 @@ if [[ "${ASSETS}" == "yes" ]]; then
   # Rust CLI archive. Each platform packages what its own tooling can:
   #   linux            tar.gz, reh + reh-web .tar.gz, cli .tar.gz
   #   darwin           .zip, .dmg, reh + reh-web .tar.gz, cli .tar.gz
-  #   win32            .zip, Inno system/user setup .exe, reh/reh-web (x64),
-  #                    cli .tar.gz — and the MSI only with --msi, because
-  #                    build/windows/msi/* is still VSCodium-branded.
+  #   win32            .zip, Inno system/user setup .exe, the WiX .msi (both
+  #                    variants), reh/reh-web (x64), cli .tar.gz
   (
     export CI_BUILD=yes
     export SHOULD_BUILD_DEB=no SHOULD_BUILD_RPM=no SHOULD_BUILD_TAR=yes
