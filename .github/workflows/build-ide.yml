@@ -193,6 +193,17 @@ jobs:
           echo "=== assets"
           ls -lh packages/crow-gui/vscodium/assets/ 2>/dev/null || true
 
+      # Uploaded before the smoke test on purpose: a packaging bug should not
+      # cost the artifacts that prove what was built.
+      - name: Upload assets
+        if: inputs.assets != false
+        uses: actions/upload-artifact@v4
+        with:
+          name: crow-ide-${{ matrix.name }}
+          path: packages/crow-gui/vscodium/assets/*
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Smoke-test the desktop app
         run: |
           # The Electron app cannot start headless, so prove the packaged tree
@@ -222,15 +233,6 @@ jobs:
             if (bad.length) { console.error(bad.join("\n")); process.exit(1); }
             console.log("product.json OK:", p.applicationName, p.nameShort, p.dataFolderName);
           '
-
-      - name: Upload assets
-        if: inputs.assets != false
-        uses: actions/upload-artifact@v4
-        with:
-          name: crow-ide-${{ matrix.name }}
-          path: packages/crow-gui/vscodium/assets/*
-          if-no-files-found: error
-          retention-days: 30
 
   release:
     name: Publish release
