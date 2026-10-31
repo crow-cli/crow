@@ -320,7 +320,7 @@ if [[ "${ASSETS}" == "yes" ]]; then
       *.sha256|*.sha1)           continue ;;
       "${APP_NAME}UserSetup-"*)  new="${APP_LC}-user-setup-${base#"${APP_NAME}"UserSetup-}" ;;
       "${APP_NAME}Setup-"*)      new="${APP_LC}-setup-${base#"${APP_NAME}"Setup-}" ;;
-      "${APP_NAME}."*)           new="${APP_LC}.${base#"${APP_NAME}."}" ;;
+      "${APP_NAME}."*)           new="${APP_LC}-${base#"${APP_NAME}."}" ;;
       "${APP_NAME}-"*)           new="${APP_LC}-${base#"${APP_NAME}-"}" ;;
       *)                         continue ;;
     esac
