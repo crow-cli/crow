@@ -41,10 +41,9 @@ on:
     tags:
       - "v*"
 
-concurrency:
-  group: build-ide-${{ github.ref }}
-  cancel-in-progress: false
-
+# No concurrency group on purpose: a queued run behind an hours-long one is
+# useless for bisecting a failure, and GitHub's 20-job limit fits this matrix
+# several times over.
 permissions: {}
 
 jobs:
@@ -70,7 +69,7 @@ jobs:
             {"name":"linux-x64","runner":"ubuntu-22.04","arch":"x64","platform":"linux","packages":"--deb --rpm"},
             {"name":"linux-arm64","runner":"ubuntu-24.04-arm","arch":"arm64","platform":"linux","packages":"--deb --rpm"},
             {"name":"darwin-x64","runner":"macos-15-intel","arch":"x64","platform":"osx","packages":""},
-            {"name":"darwin-arm64","runner":"macos-14","arch":"arm64","platform":"osx","packages":""},
+            {"name":"darwin-arm64","runner":"macos-15","arch":"arm64","platform":"osx","packages":""},
             {"name":"win32-x64","runner":"windows-2022","arch":"x64","platform":"windows","packages":""}
           ]'
           # jq -c keeps the result on ONE line: a multi-line value needs the
