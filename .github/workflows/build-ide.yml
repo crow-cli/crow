@@ -66,11 +66,11 @@ jobs:
           # come from the HOST dpkg-shlibdeps (vscodium/patches/user/03), so an
           # older base keeps the packages installable on older distros.
           ALL='[
-            {"name":"linux-x64","runner":"ubuntu-22.04","arch":"x64","platform":"linux","packages":"--deb --rpm"},
-            {"name":"linux-arm64","runner":"ubuntu-24.04-arm","arch":"arm64","platform":"linux","packages":"--deb --rpm"},
-            {"name":"darwin-x64","runner":"macos-15-intel","arch":"x64","platform":"osx","packages":""},
-            {"name":"darwin-arm64","runner":"macos-15","arch":"arm64","platform":"osx","packages":""},
-            {"name":"win32-x64","runner":"windows-2022","arch":"x64","platform":"windows","packages":""}
+            {"name":"linux-x64","runner":"ubuntu-22.04","arch":"x64","platform":"linux","tree":"linux","heap":"8192","packages":"--deb --rpm"},
+            {"name":"linux-arm64","runner":"ubuntu-24.04-arm","arch":"arm64","platform":"linux","tree":"linux","heap":"8192","packages":"--deb --rpm"},
+            {"name":"darwin-x64","runner":"macos-15-intel","arch":"x64","platform":"osx","tree":"darwin","heap":"12288","packages":""},
+            {"name":"darwin-arm64","runner":"macos-15","arch":"arm64","platform":"osx","tree":"darwin","heap":"12288","packages":""},
+            {"name":"win32-x64","runner":"windows-2022","arch":"x64","platform":"windows","tree":"win32","heap":"8192","packages":""}
           ]'
           # jq -c keeps the result on ONE line: a multi-line value needs the
           # here-doc form of $GITHUB_OUTPUT, and `echo "x={...}"` of a pretty
@@ -97,9 +97,11 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
-      # gulp minify needs a heap well past node's default. The vendored macOS
-      # pipeline uses 12288 too.
-      MAX_OLD_SPACE_SIZE: 8192
+      # gulp minify needs a heap well past node's default. 8192 is enough on
+      # linux and windows; the macOS arm runner has 7GB of RAM and dies in
+      # compile-src with "Ineffective mark-compacts near heap limit", so it gets
+      # 12288 — the same split the vendored macOS workflows use.
+      MAX_OLD_SPACE_SIZE: ${{ matrix.heap }}
     defaults:
       run:
         shell: bash
@@ -207,9 +209,12 @@ jobs:
       - name: Smoke-test the desktop app
         run: |
           # The Electron app cannot start headless, so prove the packaged tree
-          # rather than launching it: the launcher, the workbench bundle, the
-          # branded product.json and crow's built-in chat extension.
-          APP_DIR=packages/crow-gui/vscodium/VSCode-${{ matrix.platform }}-${{ matrix.arch }}
+          # rather than launching it: the workbench bundle, the branded
+          # product.json and crow's built-in extensions.
+          #
+          # The tree is VSCode-<tree>-<arch>. `tree` is not `platform`: --os osx
+          # writes VSCode-darwin-*, --os windows writes VSCode-win32-*.
+          APP_DIR=packages/crow-gui/vscodium/VSCode-${{ matrix.tree }}-${{ matrix.arch }}
           if [[ "${{ matrix.platform }}" == "osx" ]]; then
             APP_DIR="${APP_DIR}/Crow.app/Contents/Resources/app"
           else
@@ -219,10 +224,16 @@ jobs:
           # main process, out/vs/workbench/workbench.desktop.main.js the
           # workbench (there is no out/vs/code/electron-main/ in a packaged
           # tree — that path only exists in a dev checkout).
-          test -f "${APP_DIR}/out/main.js"
-          test -f "${APP_DIR}/out/vs/workbench/workbench.desktop.main.js"
-          test -d "${APP_DIR}/extensions/crow-acp"
-          test -d "${APP_DIR}/extensions/ms-python.python"
+          # Each check says what it looked for: a bare `test -f` fails silently
+          # and the log then shows a step that "just failed".
+          for f in out/main.js out/vs/workbench/workbench.desktop.main.js; do
+            [[ -f "${APP_DIR}/${f}" ]] || { echo "::error::missing ${APP_DIR}/${f}"; exit 1; }
+            echo "ok   ${f}"
+          done
+          for d in extensions/crow-acp extensions/ms-python.python; do
+            [[ -d "${APP_DIR}/${d}" ]] || { echo "::error::missing ${APP_DIR}/${d}"; exit 1; }
+            echo "ok   ${d}"
+          done
           node -e '
             const p = require("./'"${APP_DIR}"'/product.json");
             const bad = [];

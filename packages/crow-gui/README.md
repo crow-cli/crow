@@ -92,8 +92,9 @@ Asset names are lower-cased to `crow-…` by `build.sh` (the vendored packager
 keeps VSCodium's proper-noun casing, `CrowSetup-x64-…exe`), and every Linux and
 macOS asset gets a `.sha256`/`.sha1` beside it. macOS artifacts are **unsigned**
 unless the `CERTIFICATE_OSX_*` secrets are configured; without them `build.sh`
-makes the `.dmg` itself, since the vendored packager only does so inside its
-codesign/notarize path.
+makes the `.dmg` itself with `hdiutil`, since the vendored packager only does so
+inside its codesign/notarize path — and `npx create-dmg`, the tool that path
+uses, refuses to run at all without a signing identity.
 
 Re-running `./build.sh` **resumes**: `prepare_vscode.sh` patches `vscode/` in
 place and cannot run twice, so a prepared tree is detected by the

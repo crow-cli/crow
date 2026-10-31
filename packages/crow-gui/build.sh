@@ -332,12 +332,23 @@ if [[ "${ASSETS}" == "yes" ]]; then
   # The vendored osx packager only makes a .dmg when it can sign and notarize
   # (create-dmg runs inside the CERTIFICATE_OSX_P12_DATA branch), so an
   # unconfigured build would ship a .zip and no disk image. Make the unsigned
-  # .dmg here instead.
+  # .dmg here instead, with hdiutil and no network:
+  #
+  # `npx create-dmg` is not an option for this. It refuses to run without a
+  # code signing identity even though the bundle is unsigned — "No suitable code
+  # signing identity found", exit 2 — which is what killed the first macOS CI
+  # build after it had already packaged everything. The image only needs the
+  # drag-to-Applications layout, and that is an /Applications symlink beside the
+  # bundle.
   if [[ "${BUILD_OS}" == "osx" && -z "${CERTIFICATE_OSX_P12_DATA:-}" ]]; then
     APP_BUNDLE="$( ls -d "VSCode-darwin-${VSCODE_ARCH}"/*.app | head -1 )"
+    DMG="assets/${APP_LC}-darwin-${VSCODE_ARCH}-${RELEASE_VERSION}.dmg"
     echo "crow-gui: no signing certificate — building an unsigned .dmg from ${APP_BUNDLE}"
-    npx --yes create-dmg --overwrite "${APP_BUNDLE}" assets/ >/dev/null
-    mv assets/*.dmg "assets/${APP_LC}-darwin-${VSCODE_ARCH}-${RELEASE_VERSION}.dmg"
+    STAGE="$( mktemp -d )"
+    cp -R "${APP_BUNDLE}" "${STAGE}/"
+    ln -s /Applications "${STAGE}/Applications"
+    hdiutil create -volname "${APP_NAME}" -srcfolder "${STAGE}" -ov -format UDZO "${DMG}" >/dev/null
+    rm -rf "${STAGE}"
     rechecksum="yes"
   fi
 
