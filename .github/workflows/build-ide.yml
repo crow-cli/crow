@@ -253,6 +253,9 @@ jobs:
             dist/*.zip
             dist/*.dmg
             dist/*.exe
+            # one .sha256/.sha1 beside each Linux and macOS asset
+            dist/*.sha256
+            dist/*.sha1
           # Without this an unmatched glob publishes an assetless release and
           # exits 0 — the failure mode crow-cli's own v0.1.35..v0.1.48 shipped.
           fail_on_unmatched_files: true
