@@ -54,7 +54,13 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
   exit 1
 fi
 
-GALLERY="$(jq -r '.gallery' "${MANIFEST}")"
+# jq on Windows ships as a native mingw binary and writes CRLF to a pipe, so
+# every value it hands back carries a trailing CR: a gallery URL of
+# "https://open-vsx.org/api\r" is what `curl: (3) URL rejected: Bad path` was.
+# One `tr` after jq, not a `\r`-strip at every use.
+jqx() { jq "$@" | tr -d '\r'; }
+
+GALLERY="$(jqx -r '.gallery' "${MANIFEST}")"
 mkdir -p "${CACHE}"
 
 while read -r id version tp; do
@@ -66,12 +72,18 @@ while read -r id version tp; do
 
   if [[ ! -f "${vsix}" ]]; then
     api="${GALLERY}/${ns}/${name}${tp:+/${tp}}/${version}"
-    url="$(curl -fsSL "${api}" | jq -r '.files.download // empty')"
-    if [[ -z "${url}" ]]; then
-      echo "crow-gui: Open VSX has no download for ${slug} (${api})" >&2
+    # ${x@Q} quotes invisibly wrong input (a stray CR, a space) as $'\r', so the
+    # log shows the bug instead of a URL that looks correct.
+    if ! meta="$(curl -fsSL "${api}")"; then
+      printf 'crow-gui: curl failed for %s\n' "${api@Q}" >&2
       exit 1
     fi
-    echo "crow-gui: fetching ${slug}.vsix"
+    url="$(jqx -r '.files.download // empty' <<<"${meta}")"
+    if [[ -z "${url}" ]]; then
+      printf 'crow-gui: Open VSX has no download for %s (%s)\n' "${slug@Q}" "${api@Q}" >&2
+      exit 1
+    fi
+    echo "crow-gui: fetching ${slug}.vsix from ${url}"
     curl -fsSL --retry 3 -o "${vsix}.part" "${url}"
     mv "${vsix}.part" "${vsix}"
   fi
@@ -89,4 +101,4 @@ while read -r id version tp; do
   done
   rm -rf "${stage}"
   echo "crow-gui: built-in ${id} ${version}${tp:+ (${tp})} → ${#TARGETS[@]} tree(s)"
-done < <(jq -r '.extensions[] | [.id, .version, (.targetPlatform // "")] | @tsv' "${MANIFEST}")
+done < <(jqx -r '.extensions[] | [.id, .version, (.targetPlatform // "")] | @tsv' "${MANIFEST}")
