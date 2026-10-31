@@ -67,8 +67,14 @@ conversation as a transcript with syntax-highlighted code and diff cards, and
 drives the agent from a vim-style composer."""
 # Terminal=true launcher entry plus the hicolor ladder its Icon= key resolves
 # through; without these the .deb installs a binary no app grid can find.
+#
+# Everything here is `crow-agent`, not `crow`: the TUI is one of three things a
+# single `crow` entry point can start (IDE, `serve-web`, agent), and that entry
+# point belongs to `crow-cli install crow`, which owns /usr/bin/crow and
+# /usr/share/applications/crow.desktop. Two packages claiming the same paths
+# would silently overwrite each other's launcher.
 assets = [
-    ["../../target/release/crow", "/usr/bin/crow", "755"],
+    ["../../target/release/crow-agent", "/usr/bin/crow-agent", "755"],
     ["README.md", "/usr/share/doc/crow-client/README.md", "644"],
     ["packaging/crow.desktop", "/usr/share/applications/crow.desktop", "644"],
     ["packaging/icons/hicolor/16x16/apps/crow.png", "/usr/share/icons/hicolor/16x16/apps/crow.png", "644"],

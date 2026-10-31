@@ -1,0 +1,186 @@
+name: Build TUI
+
+# The Rust client (`crow-agent`): one binary per platform, packaged with its
+# license, README and the shell completions the release expects. The IDE lives
+# in build-ide.yml — it is a gulp/electron build, this is a cargo build, and
+# they share nothing but the repo.
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Which platform to build"
+        type: choice
+        default: all
+        options: [all, linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64]
+      deb:
+        description: "Also build a .deb (linux only, needs cargo-deb)"
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Pick platforms
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          # `target` is the cargo triple's short form used in the asset name, the
+          # same vocabulary crow-cli's releases use (crow-cli-linux-x86_64.tar.gz)
+          # so `crow-cli install crow` needs one rule for both.
+          # linux-x64 runs on ubuntu-22.04: a glibc-2.35 binary runs on newer
+          # distros but not the other way round.
+          ALL='[
+            {"name":"linux-x64","runner":"ubuntu-22.04","target":"linux-x86_64"},
+            {"name":"linux-arm64","runner":"ubuntu-24.04-arm","target":"linux-aarch64"},
+            {"name":"darwin-x64","runner":"macos-15-intel","target":"darwin-x86_64"},
+            {"name":"darwin-arm64","runner":"macos-15","target":"darwin-aarch64"},
+            {"name":"win32-x64","runner":"windows-2022","target":"windows-x86_64"}
+          ]'
+          if [[ -z "${PLATFORM}" || "${PLATFORM}" == "all" ]]; then
+            selected="$( jq -c . <<<"${ALL}" )"
+          else
+            selected="$( jq -c --arg want "${PLATFORM}" 'map(select(.name == $want))' <<<"${ALL}" )"
+          fi
+          if [[ "${selected}" == "[]" ]]; then
+            echo "::error::unknown platform '${PLATFORM}'"
+            exit 1
+          fi
+          echo "matrix={\"include\":${selected}}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: ${{ matrix.name }}
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # rust-toolchain is not pinned in this repo; stable plus the version in
+      # `rust-version` (if any) is what the crates support.
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Build
+        run: cargo build --release --bin crow-agent --locked
+
+      # `[profile.release] strip = true`, so the binary is already stripped;
+      # `--version` is the cheapest proof it links and runs on this runner.
+      - name: Smoke-test the binary
+        run: |
+          BIN=target/release/crow-agent
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then BIN="${BIN}.exe"; fi
+          "${BIN}" --version
+
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          BIN=target/release/crow-agent
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            BIN="${BIN}.exe"
+            STAGE="$( mktemp -d )"
+            cp "${BIN}" "${STAGE}/crow-agent.exe"
+            cp LICENSE.md "${STAGE}/LICENSE.md"
+            ( cd "${STAGE}" && 7z a -tzip "${GITHUB_WORKSPACE}/crow-agent-${TARGET}.zip" crow-agent.exe LICENSE.md >/dev/null )
+            ARCHIVE="crow-agent-${TARGET}.zip"
+          else
+            ARCHIVE="crow-agent-${TARGET}.tar.gz"
+            tar -czf "${ARCHIVE}" -C "$( dirname "${BIN}" )" crow-agent -C "${GITHUB_WORKSPACE}" LICENSE.md
+          fi
+          # The checksum file names the asset, so `sha256sum -c` works where it
+          # was downloaded and the installer can verify before unpacking.
+          if [[ "${RUNNER_OS}" == "macOS" ]]; then
+            shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
+            shasum -a 1 "${ARCHIVE}" > "${ARCHIVE}.sha1"
+          else
+            sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+            sha1sum "${ARCHIVE}" > "${ARCHIVE}.sha1"
+          fi
+          ls -lh "crow-agent-${TARGET}".*
+
+      # Off by default: cargo-deb takes minutes to compile and the asset list in
+      # Cargo.toml still names the pre-rename binary. Opt in to test it.
+      - name: Build .deb
+        if: ${{ inputs.deb && matrix.name == 'linux-x64' }}
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb -p crow-client --no-build
+          ls -lh target/debian/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crow-agent-${{ matrix.target }}
+          path: |
+            crow-agent-${{ matrix.target }}.tar.gz
+            crow-agent-${{ matrix.target }}.zip
+            crow-agent-${{ matrix.target }}.tar.gz.sha256
+            crow-agent-${{ matrix.target }}.tar.gz.sha1
+            crow-agent-${{ matrix.target }}.zip.sha256
+            crow-agent-${{ matrix.target }}.zip.sha1
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Attach to release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: crow-agent-*
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            crow-agent-*.tar.gz
+            crow-agent-*.zip
+            crow-agent-*.tar.gz.sha256
+            crow-agent-*.zip.sha256
+            crow-agent-*.tar.gz.sha1
+            crow-agent-*.zip.sha1
+          # Without this an unmatched glob publishes an assetless release and
+          # exits 0.
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
+          generate_release_notes: true

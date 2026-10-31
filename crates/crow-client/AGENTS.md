@@ -11,7 +11,8 @@ recollection points at one of them, it is stale.
 There is no plugin host, no profile system, no client-plugin tree, no
 `ctx.acpClient`, no agent pool and no second process. Nothing answers the
 `_crow/tui/*` extension family in `src/ext.rs` either, which is why four slash
-commands are parked (below). The user runs `./target/release/crow` directly.
+commands are parked (below). The user runs `./target/release/crow-agent`
+directly.
 
 What *is* still vestigial, and exactly where:
 

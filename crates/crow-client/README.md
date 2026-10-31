@@ -53,18 +53,24 @@ decisions below have something to be decided against.
 
 ## What exists today
 
-### This repo: `crow-client` v0.1.0, binary `crow`
+### This repo: `crow-client` v0.1.0, binary `crow-agent`
 
 A pure-Rust binary crate. No Node, no npm, no plugin host — the JavaScript layer
 this project was forked out of is deleted, not dormant, and the git history is
 full of it.
 
 ```
-cargo build --release -j 6      # -> target/release/crow
+cargo build --release -j 6      # -> target/release/crow-agent
 cargo test --locked             # the only gate
 ```
 
-### Packaging: the `cargo deb` route
+### Packaging
+
+`.github/workflows/build-tui.yml` builds the binary on all five targets
+(linux/darwin × x64/arm64, win32 x64) and attaches
+`crow-agent-<target>.tar.gz` (or `.zip`) plus `.sha256`/`.sha1` to a `v*`
+release. `[profile.release] strip = true`, so the shipped binary carries no
+symbols.
 
 The .deb is how the TUI reaches the app grid. It needs `cargo-deb`
 (`cargo install cargo-deb`):
@@ -80,11 +86,12 @@ sudo dpkg -i target/debian/crow-client_*.deb # then click it in the app drawer
 `/usr/share/applications/crow.desktop` (`Terminal=true` — a TUI needs a
 terminal), plus the hicolor icon ladder `Icon=crow` resolves through.
 
-This route predates `crow-cli install crow`, which installs the **IDE's** .deb
-and puts a `crow` shim (IDE / `serve-web` / `agent`) at `/usr/bin/crow`. The two
-packages both claim `/usr/bin/crow` and `crow.desktop`, and the assets list still
-names `target/release/crow` from before the binary was renamed to `crow-agent`.
-Unresolved on purpose — see TODO.md item J.
+Both the .deb and the desktop entry are `crow-agent`, never `crow`: `crow` is
+the umbrella entry point (IDE / `serve-web` / `agent`) that
+`crow-cli install crow` owns, alongside `/usr/bin/crow` and
+`crow.desktop`. This package installs `/usr/bin/crow-agent` and its own
+launcher, so the two never fight over a path, and `crow agent` execs the sibling
+`crow-agent` on PATH.
 
 What it does: spawns an [ACP](https://agentclientprotocol.com/) agent as a child
 process over stdio and renders the conversation — streaming text, reasoning,
