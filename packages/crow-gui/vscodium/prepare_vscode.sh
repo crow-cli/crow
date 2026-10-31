@@ -302,6 +302,11 @@ if [[ "${OS_NAME}" == "linux" ]]; then
   sed -i "s|Microsoft Corporation|${ORG_NAME}|" resources/linux/rpm/code.spec.template
   sed -i "s|Visual Studio Code Team <vscode-linux@microsoft.com>|${ORG_NAME} ${REPO_URL}/graphs/contributors|" resources/linux/rpm/code.spec.template
   sed -i "s|Visual Studio Code|${APP_NAME}|" resources/linux/rpm/code.spec.template
+  # Release is hardcoded to `el8` by patches/linux/00-asset-fix-rpm-version.patch
+  # because VSCodium builds its .rpm inside an EL8 container. crow builds it on
+  # the runner against the host glibc, so an el8 tag is a compatibility claim
+  # that is not true — and it lands in the filename.
+  sed -i -E "s|^Release:  el8$|Release:  1|" resources/linux/rpm/code.spec.template
   sed -i "s|https://code.visualstudio.com/docs/setup/linux|${REPO_URL}#download-install|" resources/linux/rpm/code.spec.template
   sed -i "s|https://code.visualstudio.com|${SITE_URL}|" resources/linux/rpm/code.spec.template
 elif [[ "${OS_NAME}" == "windows" ]]; then
