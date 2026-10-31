@@ -48,48 +48,52 @@ concurrency:
 permissions: {}
 
 jobs:
+  plan:
+    # The job matrix is built here rather than written inline: `matrix` is not
+    # available to a job-level `if:` (the dispatch event is rejected outright
+    # with "Unrecognized named-value: 'matrix'"), so the platform to build is
+    # selected by filtering this table before the matrix exists.
+    name: Pick platforms
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          ALL='[
+            {"name":"linux-x64","runner":"ubuntu-22.04","arch":"x64","platform":"linux","packages":"--deb --rpm"},
+            {"name":"linux-arm64","runner":"ubuntu-24.04-arm","arch":"arm64","platform":"linux","packages":"--deb --rpm"},
+            {"name":"darwin-x64","runner":"macos-15-intel","arch":"x64","platform":"osx","packages":""},
+            {"name":"darwin-arm64","runner":"macos-14","arch":"arm64","platform":"osx","packages":""},
+            {"name":"win32-x64","runner":"windows-2022","arch":"x64","platform":"windows","packages":""}
+          ]'
+          # ubuntu-22.04 for linux-x64, not latest: the .deb/.rpm Depends come
+          # from the HOST dpkg-shlibdeps (vscodium/patches/user/03), so an older
+          # base keeps the packages installable on older distros.
+          if [[ -z "${PLATFORM}" || "${PLATFORM}" == "all" ]]; then
+            selected="${ALL}"
+          else
+            selected="$( jq -c --arg want "${PLATFORM}" 'map(select(.name == $want))' <<<"${ALL}" )"
+          fi
+          if [[ "${selected}" == "[]" ]]; then
+            echo "::error::unknown platform '${PLATFORM}'"
+            exit 1
+          fi
+          echo "matrix={\"include\":${selected}}" >> "${GITHUB_OUTPUT}"
+
   build:
     name: ${{ matrix.name }}
-    # Every job is listed; only the selected one runs (workflow_dispatch
-    # "platform") or all of them (tag push).
-    if: |
-      !inputs.platform || inputs.platform == 'all' || inputs.platform == matrix.name
+    needs: plan
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 420
     permissions:
       contents: read
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # ubuntu-22.04, not latest: the .deb/.rpm Depends are computed from the
-          # HOST dpkg-shlibdeps (vscodium/patches/user/03), so an older base
-          # keeps the packages installable on older distros.
-          - name: linux-x64
-            runner: ubuntu-22.04
-            arch: x64
-            platform: linux
-            packages: "--deb --rpm"
-          - name: linux-arm64
-            runner: ubuntu-24.04-arm
-            arch: arm64
-            platform: linux
-            packages: "--deb --rpm"
-          - name: darwin-x64
-            runner: macos-15-intel
-            arch: x64
-            platform: osx
-            packages: ""
-          - name: darwin-arm64
-            runner: macos-14
-            arch: arm64
-            platform: osx
-            packages: ""
-          - name: win32-x64
-            runner: windows-2022
-            arch: x64
-            platform: windows
-            packages: ""
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       # gulp minify needs a heap well past node's default. The vendored macOS
       # pipeline uses 12288 too.
