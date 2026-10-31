@@ -2,7 +2,10 @@
 # Install crow's bundled extensions (./bundled-exts.json) into every packaged
 # tree under ./vscodium as BUILT-INS.
 #
-#   ./bundle-exts.sh [os] [arch]     default: linux x64
+#   ./bundle-exts.sh [platform] [arch]   default: linux x64
+#
+# The platform is VS Code's, not the OS name: linux, darwin or win32. It is also
+# the Open VSX targetPlatform a `targetPlatform: "auto"` entry resolves to.
 #
 # Built-ins are scanned from a tree's extensions dir at startup, so bundling the
 # Jupyter + Python stack this way means the notebook kernel picker and the
@@ -16,9 +19,9 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-OS_NAME="${1:-linux}"
+PLATFORM_OS="${1:-linux}"
 ARCH="${2:-x64}"
-PLATFORM="${OS_NAME}-${ARCH}"
+PLATFORM="${PLATFORM_OS}-${ARCH}"
 MANIFEST="./bundled-exts.json"
 CACHE="./.build/exts"
 
@@ -26,11 +29,24 @@ CACHE="./.build/exts"
 command -v unzip >/dev/null 2>&1 || { echo "crow-gui: bundle-exts.sh needs unzip" >&2; exit 1; }
 
 # Only the trees this build actually produced (a --no-web build has no reh-web,
-# reh exists only with --reh).
+# reh exists only with --reh). macOS nests the workbench inside the .app bundle.
+if [[ "${PLATFORM_OS}" == "darwin" ]]; then
+  # A glob that matches nothing stays literal, and [[ -d ]] then fails quietly —
+  # an `ls` in a command substitution would trip `set -e` instead.
+  DESKTOP_EXTS=""
+  for app in "vscodium/VSCode-${PLATFORM}"/*.app; do
+    [[ -d "${app}" ]] || continue
+    DESKTOP_EXTS="${app}/Contents/Resources/app/extensions"
+    break
+  done
+else
+  DESKTOP_EXTS="vscodium/VSCode-${PLATFORM}/resources/app/extensions"
+fi
+
 TARGETS=()
-for d in "vscodium/VSCode-${OS_NAME}-${ARCH}/resources/app/extensions" \
-         "vscodium/vscode-reh-web-${OS_NAME}-${ARCH}/extensions" \
-         "vscodium/vscode-reh-${OS_NAME}-${ARCH}/extensions"; do
+for d in "${DESKTOP_EXTS}" \
+         "vscodium/vscode-reh-web-${PLATFORM}/extensions" \
+         "vscodium/vscode-reh-${PLATFORM}/extensions"; do
   if [[ -d "${d}" ]]; then TARGETS+=("${d}"); fi
 done
 if [[ ${#TARGETS[@]} -eq 0 ]]; then

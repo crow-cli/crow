@@ -1,0 +1,243 @@
+name: Build IDE
+
+# crow's desktop app and web server, built per platform from
+# packages/crow-gui/build.sh — the vendored VSCodium pipeline with crow's
+# branding from packages/crow-gui/crow.env.
+#
+# Deliberately NOT triggered on push: a cold run is hours long (a pinned VS
+# Code checkout, `npm ci`, gulp minify, then the Rust CLI), so a commit to
+# packages/ must not silently burn a runner. Run it by hand, or push a v* tag to
+# also publish the artifacts to a release.
+#
+# Known gaps, in the order they should be closed:
+#   - Windows MSI: build/windows/msi/* is still VSCodium-branded (PRODUCT_NAME,
+#     upgrade code, WiX), so build.sh emits the Inno .exe installers only.
+#     Pass --msi once that is branded.
+#   - Windows arm64, macOS universal: one arch per runner.
+#   - Signing: macOS artifacts are unsigned without the CERTIFICATE_OSX_*
+#     secrets, and the .dmg is created by build.sh rather than the vendored
+#     notarize path. Windows installers are unsigned without a code-signing
+#     certificate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Which platform to build
+        type: choice
+        default: all
+        options:
+          - all
+          - linux-x64
+          - linux-arm64
+          - darwin-x64
+          - darwin-arm64
+          - win32-x64
+      assets:
+        description: Package release artifacts (tarballs, .deb/.rpm, .zip/.dmg, setup .exe)
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: build-ide-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    # Every job is listed; only the selected one runs (workflow_dispatch
+    # "platform") or all of them (tag push).
+    if: |
+      !inputs.platform || inputs.platform == 'all' || inputs.platform == matrix.name
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 420
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04, not latest: the .deb/.rpm Depends are computed from the
+          # HOST dpkg-shlibdeps (vscodium/patches/user/03), so an older base
+          # keeps the packages installable on older distros.
+          - name: linux-x64
+            runner: ubuntu-22.04
+            arch: x64
+            platform: linux
+            packages: "--deb --rpm"
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+            platform: linux
+            packages: "--deb --rpm"
+          - name: darwin-x64
+            runner: macos-15-intel
+            arch: x64
+            platform: osx
+            packages: ""
+          - name: darwin-arm64
+            runner: macos-14
+            arch: arm64
+            platform: osx
+            packages: ""
+          - name: win32-x64
+            runner: windows-2022
+            arch: x64
+            platform: windows
+            packages: ""
+    env:
+      # gulp minify needs a heap well past node's default. The vendored macOS
+      # pipeline uses 12288 too.
+      MAX_OLD_SPACE_SIZE: 8192
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        run: |
+          # The checkout tree, node_modules and the packaged app trees together
+          # are ~15GB; the preinstalled toolchains are not needed.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo apt-get clean
+          df -h /
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # libkrb5-dev is what VSCodium's own CI installs for the native
+          # modules; fakeroot + dpkg-dev are for --deb, rpm for --rpm.
+          sudo apt-get install -y --no-install-recommends \
+            libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev \
+            fakeroot dpkg-dev rpm jq unzip
+
+      - name: Check Windows build dependencies
+        if: runner.os == 'Windows'
+        run: |
+          # 7z is used by build/windows/prepare_assets.sh, jq by the pipeline's
+          # product.json edits. Both ship with the windows-2022 image; fail
+          # loudly here instead of deep inside a package step.
+          for tool in 7z jq unzip; do
+            command -v "${tool}" >/dev/null || echo "::warning::${tool} not on PATH"
+          done
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: packages/crow-gui/vscodium/.nvmrc
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Rust toolchain
+        run: |
+          # The packaged `crow` CLI (vscode/cli) and the Rust agent TUI in
+          # crates/crow-client both build with the host rustup toolchain, which
+          # every runner image ships. build_cli.sh adds the explicit target.
+          rustup show active-toolchain
+          cargo --version
+
+      - name: Build
+        env:
+          # Rust CLI download endpoint + product.json URLs come from
+          # crow.env; first-run builds fetch ~340MB of VS Code, so the token
+          # only matters for its rate limits.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ARGS=(--os "${{ matrix.platform }}" --arch "${{ matrix.arch }}")
+          if [[ "${{ inputs.assets }}" != "false" ]]; then
+            ARGS+=(--assets ${{ matrix.packages }})
+          fi
+          echo "crow-gui: build.sh ${ARGS[*]}"
+          ./packages/crow-gui/build.sh "${ARGS[@]}"
+
+      - name: Show what was produced
+        run: |
+          echo "=== packaged trees"
+          ls -d packages/crow-gui/vscodium/VSCode-* \
+                packages/crow-gui/vscodium/vscode-reh-* 2>/dev/null || true
+          echo "=== assets"
+          ls -lh packages/crow-gui/vscodium/assets/ 2>/dev/null || true
+
+      - name: Smoke-test the desktop app
+        run: |
+          # The Electron app cannot start headless, so prove the packaged tree
+          # rather than launching it: the launcher, the workbench bundle, the
+          # branded product.json and crow's built-in chat extension.
+          APP_DIR=packages/crow-gui/vscodium/VSCode-${{ matrix.platform }}-${{ matrix.arch }}
+          if [[ "${{ matrix.platform }}" == "osx" ]]; then
+            APP_DIR="${APP_DIR}/Crow.app/Contents/Resources/app"
+          else
+            APP_DIR="${APP_DIR}/resources/app"
+          fi
+          test -f "${APP_DIR}/out/vs/code/electron-main/main.js"
+          test -d "${APP_DIR}/extensions/crow-acp"
+          test -d "${APP_DIR}/extensions/ms-python.python"
+          node -e '
+            const p = require("./'"${APP_DIR}"'/product.json");
+            const bad = [];
+            if (p.applicationName !== "crow") bad.push("applicationName=" + p.applicationName);
+            if (p.nameShort !== "Crow") bad.push("nameShort=" + p.nameShort);
+            if (!p.dataFolderName.includes("crow")) bad.push("dataFolderName=" + p.dataFolderName);
+            if (JSON.stringify(p).includes("vscodium")) bad.push("carries a vscodium string");
+            if (bad.length) { console.error(bad.join("\n")); process.exit(1); }
+            console.log("product.json OK:", p.applicationName, p.nameShort, p.dataFolderName);
+          '
+
+      - name: Upload assets
+        if: inputs.assets != false
+        uses: actions/upload-artifact@v4
+        with:
+          name: crow-ide-${{ matrix.name }}
+          path: packages/crow-gui/vscodium/assets/*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: crow-ide-*
+          merge-multiple: true
+          path: dist
+
+      - name: Check what will be published
+        run: ls -lh dist/
+
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.dmg
+            dist/*.exe
+          # Without this an unmatched glob publishes an assetless release and
+          # exits 0 — the failure mode crow-cli's own v0.1.35..v0.1.48 shipped.
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
+          generate_release_notes: true

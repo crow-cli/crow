@@ -6,8 +6,13 @@ both are first-class:
 
 | artifact | what it is | entry point |
 | --- | --- | --- |
-| `vscodium/VSCode-linux-<arch>/` | the Electron desktop app | `bin/crow` |
-| `vscodium/vscode-reh-web-linux-<arch>/` | the browser server (`reh-web`) | `bin/crow-server` |
+| `vscodium/VSCode-<platform>-<arch>/` | the Electron desktop app (`linux`, `darwin`: `Crow.app`, `win32`) | `bin/crow` |
+| `vscodium/vscode-reh-web-<platform>-<arch>/` | the browser server (`reh-web`) | `bin/crow-server` |
+
+Each platform is packaged **on** that platform: the desktop packaging is
+Electron plus OS-native tooling (dpkg/rpmbuild, hdiutil/zip, Inno Setup) and the
+bundled Rust CLI is compiled for the host. `.github/workflows/build-ide.yml`
+drives that (linux x64/arm64, darwin x64/arm64, win32 x64).
 
 `crow-cli install crow` is what puts these on a machine; this directory is what
 produces them.
@@ -66,12 +71,29 @@ VSCODE_QUALITY=stable SHOULD_BUILD_REH_WEB=yes`), then sources
 `vscodium/get_repo.sh` (fetch the pinned VS Code) and `vscodium/build.sh`
 (prepare → gulp → package → build the Rust CLI).
 
-Flags: `--arch arm64`, `--os osx|windows` (untested), `--no-web`, `--reh`,
-`--latest` (newest upstream instead of the pin), `--assets` (roll release
-tarballs), `--deb` (build `vscodium/assets/crow_<version>_amd64.deb`),
-`--prepare-only` (fetch + patch + `npm ci`, stop before gulp — the fast way to
-check that every patch still applies), `--fresh` (delete `vscodium/vscode/` and
-start the checkout over).
+Flags: `--arch arm64`, `--os linux|osx|windows` (default linux), `--no-web`,
+`--reh` (also build the remote/ssh server), `--latest` (newest upstream instead
+of the pin), `--assets` (roll the release artifacts into `vscodium/assets/`),
+`--deb` (`vscodium/assets/crow_<version>_amd64.deb`), `--rpm`
+(`crow-<version>.x86_64.rpm`), `--msi` (windows only, off by default — see
+*Not done yet*), `--prepare-only` (fetch + patch + `npm ci`, stop before gulp —
+the fast way to check that every patch still applies), `--fresh` (delete
+`vscodium/vscode/` and start the checkout over).
+
+`--assets` is what a release is made of, per platform:
+
+| platform | assets |
+| --- | --- |
+| linux | `.tar.gz` of the app, `.deb` (`--deb`), `.rpm` (`--rpm`), reh + reh-web + CLI `.tar.gz` |
+| darwin | `.zip`, `.dmg`, reh + reh-web + CLI `.tar.gz` |
+| win32 | `.zip`, Inno system/user setup `.exe`, reh + reh-web (x64 only) + CLI `.tar.gz` |
+
+Asset names are lower-cased to `crow-…` by `build.sh` (the vendored packager
+keeps VSCodium's proper-noun casing, `CrowSetup-x64-…exe`), and every Linux and
+macOS asset gets a `.sha256`/`.sha1` beside it. macOS artifacts are **unsigned**
+unless the `CERTIFICATE_OSX_*` secrets are configured; without them `build.sh`
+makes the `.dmg` itself, since the vendored packager only does so inside its
+codesign/notarize path.
 
 Re-running `./build.sh` **resumes**: `prepare_vscode.sh` patches `vscode/` in
 place and cannot run twice, so a prepared tree is detected by the
@@ -138,7 +160,8 @@ after gulp and before `--deb`:
   syncs it into every packaged tree. This is what gives a notebook its kernel
   picker and the status bar its interpreter picker, in the desktop app and in
   `crow serve-web` alike. `ms-python.vscode-pylance` stays out: Microsoft-licensed and
-  not on Open VSX. `./bundle-exts.sh [os] [arch]` re-syncs without a rebuild.
+  not on Open VSX. `./bundle-exts.sh [platform] [arch]` re-syncs without a rebuild (the platform
+  is VS Code's: `linux`, `darwin`, `win32`).
   Needs `curl` + `unzip`.
 
 Requirements: bash, git, jq, curl, unzip, node + npm matching `vscode/.nvmrc`, python3,
@@ -284,14 +307,25 @@ which `apply_patch` substitutes from `crow.env` at apply time.
 ## Not done yet
 
 - **Darwin/Windows icons are still VSCodium's** (`resources/darwin/*.icns`,
-  `resources/win32/*.ico`). crow builds Linux only; regenerating them needs
-  the icns/ico toolchain VSCodium's `icons/build_icons.sh` uses.
+  `resources/win32/*.ico`): `make_icons.py` only derives the Linux and server
+  art. Regenerating the icns/ico set needs the toolchain VSCodium's
+  `icons/build_icons.sh` uses, so a macOS/Windows build currently wears
+  VSCodium's app icon.
 - **`vscode-acp` has no browser entry point**, so the crow ACP pane is blank in
   the web build until it grows one.
 - The VS Code pin is 1.135.0; bumping it means re-running `vendor.sh` and
   fixing patch hunks.
-- Windows/macOS packaging is untested. The deb builds (`--deb`); rpm and snap
-  do not — `--assets` still skips all three.
+- **The Windows MSI is not built.** `build/windows/msi/*` is still
+  VSCodium-branded (`PRODUCT_NAME`, the upgrade code, `-dManufacturerName`), so a
+  crow MSI would install over a VSCodium install. `--msi` exists to opt in once
+  those are crow's; until then Windows ships the Inno system/user `.exe`s.
+- **No Windows arm64 / macOS universal build** — one arch per runner.
+- **Nothing is signed**: Windows installers need a code-signing certificate and
+  macOS needs `CERTIFICATE_OSX_*` (p12 + Apple ID/team/password) for codesign,
+  notarize and staple.
+- **The `reh` (remote/SSH) server is off by default**; `--reh` builds it.
+- **No snap/AppImage/Flatpak** — `--assets` sets `CI_BUILD=yes`, which skips
+  `stores/snapcraft`.
 
 ## Naming
 
