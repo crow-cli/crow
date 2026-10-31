@@ -172,6 +172,25 @@ secret-service backend, and openssl comes from `@vscode/openssl-prebuilt`.)
 First run is long (npm ci + gulp minify); expect tens of GB of scratch inside
 `vscodium/vscode/`.
 
+## CI
+
+`.github/workflows/build-ide.yml` packages each platform **on** that platform —
+five jobs, because the desktop packaging is electron-packager plus the OS's own
+tools — and attaches the results to a release for a `v*` tag. What that costs,
+measured on the first all-green run:
+
+| runner | wall clock | note |
+| --- | --- | --- |
+| `ubuntu-22.04` | ~25 min | 22.04, not `latest`: the `.deb`/`.rpm` `Depends` come from the *host* `dpkg-shlibdeps`, so an older base stays installable on older distros |
+| `ubuntu-24.04-arm` | ~30 min | |
+| `windows-2022` | ~38 min | the image already has 7-Zip, Inno Setup 6 and WiX; `jq`/`unzip` are installed if missing |
+| `macos-15-intel` | ~50 min | |
+| `macos-15` (arm64) | ~105 min | 3 vCPU / 7GB, and the build swaps: `compile-src` alone wants ~8GB. `MAX_OLD_SPACE_SIZE=12288` (the value the vendored macOS workflows use) is what gets it through — at 8192 it dies with `FATAL ERROR: Ineffective mark-compacts near heap limit` |
+
+The tree names differ from the `--os` names the workflow passes around
+(`--os osx` writes `VSCode-darwin-*`, `--os windows` writes `VSCode-win32-*`), so
+the plan job's matrix carries `tree`, `platform` and `heap` side by side.
+
 ## What crow changes in the vendored pipeline
 
 `crow-patches/vscodium-pipeline.patch` carries crow's changes to the vendored
