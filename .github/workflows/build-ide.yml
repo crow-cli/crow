@@ -63,6 +63,9 @@ jobs:
         env:
           PLATFORM: ${{ inputs.platform }}
         run: |
+          # linux-x64 runs on ubuntu-22.04, not latest: the .deb/.rpm Depends
+          # come from the HOST dpkg-shlibdeps (vscodium/patches/user/03), so an
+          # older base keeps the packages installable on older distros.
           ALL='[
             {"name":"linux-x64","runner":"ubuntu-22.04","arch":"x64","platform":"linux","packages":"--deb --rpm"},
             {"name":"linux-arm64","runner":"ubuntu-24.04-arm","arch":"arm64","platform":"linux","packages":"--deb --rpm"},
@@ -70,11 +73,11 @@ jobs:
             {"name":"darwin-arm64","runner":"macos-14","arch":"arm64","platform":"osx","packages":""},
             {"name":"win32-x64","runner":"windows-2022","arch":"x64","platform":"windows","packages":""}
           ]'
-          # ubuntu-22.04 for linux-x64, not latest: the .deb/.rpm Depends come
-          # from the HOST dpkg-shlibdeps (vscodium/patches/user/03), so an older
-          # base keeps the packages installable on older distros.
+          # jq -c keeps the result on ONE line: a multi-line value needs the
+          # here-doc form of $GITHUB_OUTPUT, and `echo "x={...}"` of a pretty
+          # JSON array is rejected as "Invalid format".
           if [[ -z "${PLATFORM}" || "${PLATFORM}" == "all" ]]; then
-            selected="${ALL}"
+            selected="$( jq -c . <<<"${ALL}" )"
           else
             selected="$( jq -c --arg want "${PLATFORM}" 'map(select(.name == $want))' <<<"${ALL}" )"
           fi
