@@ -290,10 +290,16 @@ and writes them into `vscodium/src/stable/resources/`:
 | `linux/rpm/code.xpm` | the rpm spec's icon |
 | `server/code-192.png`, `server/code-512.png` | the web workbench's PWA manifest + apple-touch-icon |
 | `server/favicon.ico` (16–256) | the browser tab |
+| `win32/code.ico` (16–256) | the exe icon (`electron.ts` `winIcon`), the Inno installers, the shell |
+| `win32/code_70x70.png`, `code_150x150.png` | the VisualElements manifest (store/appx tile) |
+| `darwin/code.icns` (32–1024) | the `.app` icon (`electron.ts` `darwinIcon`) |
 
 VSCodium's own generator (`icons/build_icons.sh`) is left alone: it needs
 rsvg-convert/imagemagick/icns tools and downloads VSCodium art from the
-network, and crow only builds Linux. Edit the art, run
+network. Everything crow ships is derived from `art/` by Pillow alone — the
+`.icns` is written here too (an `icns` header and one PNG-compressed element per
+size, which macOS has read since 10.7), so no macOS toolchain is needed to
+regenerate it. Edit the art, run
 `uv --project <crow-cli> run python make_icons.py`, commit art/ and the
 generated files, then rebuild — the icons are copied into the checkout by
 `prepare_vscode.sh`, so an already-prepared tree needs `--fresh` (or a manual
@@ -307,11 +313,6 @@ which `apply_patch` substitutes from `crow.env` at apply time.
 
 ## Not done yet
 
-- **Darwin/Windows icons are still VSCodium's** (`resources/darwin/*.icns`,
-  `resources/win32/*.ico`): `make_icons.py` only derives the Linux and server
-  art. Regenerating the icns/ico set needs the toolchain VSCodium's
-  `icons/build_icons.sh` uses, so a macOS/Windows build currently wears
-  VSCodium's app icon.
 - **`vscode-acp` has no browser entry point**, so the crow ACP pane is blank in
   the web build until it grows one.
 - The VS Code pin is 1.135.0; bumping it means re-running `vendor.sh` and

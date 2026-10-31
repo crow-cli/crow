@@ -11,6 +11,7 @@ commit both art/ and the generated files.
 import base64
 import io
 import re
+import struct
 import sys
 from pathlib import Path
 
@@ -44,10 +45,45 @@ def write_png(size: int, dest: Path) -> None:
     print(f"  {dest.relative_to(ROOT)}  {size}x{size}")
 
 
-def write_favicon(dest: Path) -> None:
-    sizes = [(s, s) for s in (16, 24, 32, 48, 64, 128, 256)]
+# .ico and .icns are the same ladder: Windows picks a size for the exe, the
+# installer, the taskbar and Alt-Tab, so every size Explorer asks for is in one
+# file. 256 is the format's cap.
+ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
+
+
+def write_ico(dest: Path) -> None:
+    sizes = [(s, s) for s in ICO_SIZES]
     tile().save(dest, format="ICO", sizes=sizes)
     print(f"  {dest.relative_to(ROOT)}  {len(sizes)} sizes")
+
+
+def write_favicon(dest: Path) -> None:
+    write_ico(dest)
+
+
+# ICNS element ids and the pixel size each one carries. macOS reads
+# PNG-compressed elements (10.7+), so this needs no encoder beyond Pillow: an
+# `icns` header, then a (type, length, payload) record per element.
+ICNS_ELEMENTS = (
+    (b"ic11", 32),   # 16@2x
+    (b"ic12", 64),   # 32@2x
+    (b"ic07", 128),
+    (b"ic08", 256),
+    (b"ic09", 512),
+    (b"ic10", 1024), # 512@2x
+)
+
+
+def write_icns(dest: Path) -> None:
+    chunks = []
+    for kind, size in ICNS_ELEMENTS:
+        buf = io.BytesIO()
+        tile().resize((size, size), Image.LANCZOS).save(buf, format="PNG", optimize=True)
+        data = buf.getvalue()
+        chunks.append(kind + struct.pack(">I", len(data) + 8) + data)
+    body = b"".join(chunks)
+    dest.write_bytes(b"icns" + struct.pack(">I", len(body) + 8) + body)
+    print(f"  {dest.relative_to(ROOT)}  {len(ICNS_ELEMENTS)} elements, {len(body) // 1024}KiB")
 
 
 def write_svg(dest: Path) -> None:
@@ -165,6 +201,13 @@ def main() -> int:
     write_png(192, RES / "server/code-192.png")
     write_png(512, RES / "server/code-512.png")
     write_favicon(RES / "server/favicon.ico")
+    # Windows: the exe icon (electron.ts winIcon), plus the two PNGs the
+    # VisualElements manifest points at for the store/appx tile.
+    write_ico(RES / "win32/code.ico")
+    write_png(150, RES / "win32/code_150x150.png")
+    write_png(70, RES / "win32/code_70x70.png")
+    # macOS: the .app icon (electron.ts darwinIcon).
+    write_icns(RES / "darwin/code.icns")
     write_letterpress()
     return 0
 
