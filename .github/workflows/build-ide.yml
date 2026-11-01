@@ -194,8 +194,18 @@ jobs:
 
       # Uploaded before the smoke test on purpose: a packaging bug should not
       # cost the artifacts that prove what was built.
+      #
+      # The condition is spelled by EVENT, not by the input alone, because a
+      # tag push has no inputs at all: `inputs.assets` is null there, and
+      # `null != false` is FALSE — so `if: inputs.assets != false` skipped this
+      # step on exactly the one trigger that publishes a release. Observed in
+      # run 41241370051 (tag v0.1.0): five green build jobs, "Upload assets"
+      # skipped on every one, then `release` downloaded zero `crow-ide-*`
+      # artifacts, never created `dist/`, and died on `ls -lh dist/` with exit
+      # 2. "Only package when asked" has to mean "package unless a dispatch
+      # explicitly said no".
       - name: Upload assets
-        if: inputs.assets != false
+        if: github.event_name != 'workflow_dispatch' || inputs.assets
         uses: actions/upload-artifact@v4
         with:
           name: crow-ide-${{ matrix.name }}
