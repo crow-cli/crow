@@ -269,6 +269,16 @@ jobs:
       - name: Check what will be published
         run: ls -lh dist/
 
+      # One .sha256/.sha1 beside each Linux and macOS asset; Windows produces
+      # none, and the globs are merged across all five platforms so the pair
+      # still matches.
+      #
+      # That note lives OUTSIDE the `files:` block on purpose. `files: |` is a
+      # YAML block scalar — a literal string — so a `#` line inside it is not a
+      # comment, it is another pattern. action-gh-release split it out, matched
+      # nothing, and with fail_on_unmatched_files it failed the step BEFORE
+      # uploading anything: run 41260927128 built all five platforms green and
+      # published zero IDE assets to v0.1.1 because of one comment line.
       - uses: softprops/action-gh-release@v1
         with:
           files: |
@@ -279,7 +289,6 @@ jobs:
             dist/*.dmg
             dist/*.exe
             dist/*.msi
-            # one .sha256/.sha1 beside each Linux and macOS asset
             dist/*.sha256
             dist/*.sha1
           # Without this an unmatched glob publishes an assetless release and
