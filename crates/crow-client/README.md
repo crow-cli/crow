@@ -53,7 +53,7 @@ decisions below have something to be decided against.
 
 ## What exists today
 
-### This repo: `crow-client` v0.1.0, binary `crow-agent`
+### This repo: `crow-client` v0.1.1, binary `crow-agent`
 
 A pure-Rust binary crate. No Node, no npm, no plugin host — the JavaScript layer
 this project was forked out of is deleted, not dormant, and the git history is
