@@ -30,7 +30,9 @@
 #     darwin   .zip, .dmg, reh + reh-web + cli .tar.gz, a .sha256/.sha1
 #              beside each file (unsigned without CERTIFICATE_OSX_*)
 #     win32    .zip, Inno system/user setup .exe, the WiX .msi (system +
-#              updates-disabled), reh + reh-web (x64 only) and cli .tar.gz
+#              updates-disabled), reh/reh-web (x64 only) and cli .tar.gz
+#     and on every platform crow-ide-<platform>-<arch>.json, that platform's
+#     slice of the release asset index (see ./manifest.sh)
 #
 # Every packaged tree also carries crow's bundled extensions as BUILT-INS: the
 # chat extension (built from ../vscode-acp with bun) and the Jupyter + Python
@@ -346,6 +348,12 @@ if [[ "${ASSETS}" == "yes" ]]; then
     rechecksum="yes"
   fi
 
+  # A resumed local --assets run still holds the previous run's manifest
+  # fragment, and prepare_checksums.sh sums every file it finds — which would
+  # publish a crow-ide-*.json.sha256 that indexes nothing. The fragment is
+  # rewritten below, after the checksums, so dropping it here is safe.
+  rm -f assets/crow-ide-*.json assets/crow-ide-*.json.sha256 assets/crow-ide-*.json.sha1
+
   # Renames move files out from under the checksums prepare_assets.sh wrote, so
   # they are recomputed (never left stale) once everything is named. Windows
   # ships no checksums — its installers are signed, not summed.
@@ -354,6 +362,19 @@ if [[ "${ASSETS}" == "yes" ]]; then
     # shellcheck disable=SC1091
     . ./prepare_checksums.sh
   fi
+
+  # This platform's slice of the release's asset index, written last so it names
+  # the files as they will actually be published. build-ide.yml's release job
+  # merges the five slices into crow-manifest.json. It has to exist because the
+  # names above carry ${RELEASE_VERSION}, whose patch component is derived from
+  # the build date — knowing the git tag does not let a downloader construct
+  # crow_1.135.07321_amd64.deb. See manifest.sh.
+  "${HERE}/manifest.sh" fragment \
+    --assets-dir assets \
+    --platform "${PLAT}" \
+    --arch "${VSCODE_ARCH}" \
+    --release-version "${RELEASE_VERSION}" \
+    --vscode-tag "${MS_TAG}"
 fi
 
 echo

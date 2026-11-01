@@ -54,7 +54,12 @@ jobs:
     permissions: {}
     outputs:
       matrix: ${{ steps.pick.outputs.matrix }}
+      release_version: ${{ steps.version.outputs.release_version }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - id: pick
         env:
           PLATFORM: ${{ inputs.platform }}
@@ -83,6 +88,38 @@ jobs:
           fi
           echo "matrix={\"include\":${selected}}" >> "${GITHUB_OUTPUT}"
 
+      # RELEASE_VERSION is derived ONCE here instead of being left to get_repo.sh
+      # in each of the five build jobs. Its patch component is
+      #   TIME_PATCH=$( printf "%04d" $(($(date +%-j) * 24 + $(date +%-H))) )
+      # — day-of-year times 24 plus the hour — so it rolls over every hour, and
+      # jobs that do not all start inside the same UTC hour stamp different
+      # product versions into the same release. Run 41241370051 (tag v0.1.0)
+      # built 1.135.07317 on linux-x64 and 1.135.07316 on the other four, so
+      # that release shipped two genuinely different builds of one tag and no
+      # filename distinguished them.
+      #
+      # get_repo.sh already supports an externally-set RELEASE_VERSION: it
+      # validates the shape, re-derives MS_TAG from it, and refuses to continue
+      # unless that matches the pinned upstream/<quality>.json. So this is a
+      # supported hook, not a patch to the vendored pipeline. The checks below
+      # are its checks, run in a job that costs ten seconds rather than five
+      # that cost an hour each.
+      - id: version
+        run: |
+          MS_TAG="$( jq -r '.tag' packages/crow-gui/vscodium/upstream/stable.json )"
+          TIME_PATCH="$( printf '%04d' $(( $(date +%-j) * 24 + $(date +%-H) )) )"
+          RELEASE_VERSION="${MS_TAG}${TIME_PATCH}"
+          if [[ ! "${RELEASE_VERSION}" =~ ^([0-9]+\.[0-9]+\.[0-5])[0-9]+$ ]]; then
+            echo "::error::derived RELEASE_VERSION '${RELEASE_VERSION}' does not match get_repo.sh's pattern"
+            exit 1
+          fi
+          if [[ "${BASH_REMATCH[1]}" != "${MS_TAG}" ]]; then
+            echo "::error::RELEASE_VERSION '${RELEASE_VERSION}' re-derives MS_TAG '${BASH_REMATCH[1]}', not the pinned '${MS_TAG}'"
+            exit 1
+          fi
+          echo "release_version=${RELEASE_VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "plan: RELEASE_VERSION=${RELEASE_VERSION} (MS_TAG=${MS_TAG} TIME_PATCH=${TIME_PATCH})"
+
   build:
     name: ${{ matrix.name }}
     needs: plan
@@ -99,6 +136,10 @@ jobs:
       # compile-src with "Ineffective mark-compacts near heap limit", so it gets
       # 12288 — the same split the vendored macOS workflows use.
       MAX_OLD_SPACE_SIZE: ${{ matrix.heap }}
+      # Pinned by `plan` so all five platforms stamp one product version.
+      # get_repo.sh takes the else-branch when this is set and validates it
+      # against upstream/stable.json instead of deriving it from the clock.
+      RELEASE_VERSION: ${{ needs.plan.outputs.release_version }}
     defaults:
       run:
         shell: bash
@@ -260,6 +301,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - uses: actions/download-artifact@v4
         with:
           pattern: crow-ide-*
@@ -268,6 +313,37 @@ jobs:
 
       - name: Check what will be published
         run: ls -lh dist/
+
+      # The release's index of its own assets, published beside them as
+      # crow-manifest.json. It exists because the asset filenames carry the
+      # date-derived VS Code product version — tag v0.1.1 ships
+      # crow_1.135.07321_amd64.deb — so a downloader that knows the tag cannot
+      # construct a filename, and the alternative is the GitHub API at 60
+      # unauthenticated calls/hour/IP. The manifest is reachable with no API
+      # call at releases/latest/download/crow-manifest.json, and it carries a
+      # sha256 for every asset including the Windows installers, which the
+      # vendored pipeline ships no checksums for.
+      #
+      # Each build job contributed dist/crow-ide-<platform>-<arch>.json inside
+      # its crow-ide-* artifact; those fragments are inputs, not assets, and the
+      # `files:` globs below do not match .json so they stay unpublished.
+      #
+      # This step is also where the pin in `plan` is verified after the fact:
+      # merge fails on a RELEASE_VERSION skew between platforms, on a fragment
+      # naming a file that is missing, and on any asset no fragment claimed.
+      # It costs seconds and the artifacts are already uploaded, so a failure
+      # here is cheap and re-running this job alone is enough to recover.
+      - name: Build the asset manifest
+        run: |
+          ./packages/crow-gui/manifest.sh merge \
+            --dist-dir dist \
+            --tag "${GITHUB_REF#refs/tags/}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --out dist/crow-manifest.json
+          jq '{tag, release_version, vscode_tag, base_url,
+               platforms: (.platforms | to_entries
+                           | map({(.key): (.value.assets | keys)}) | add)}' \
+            dist/crow-manifest.json
 
       # One .sha256/.sha1 beside each Linux and macOS asset; Windows produces
       # none, and the globs are merged across all five platforms so the pair
@@ -282,6 +358,7 @@ jobs:
       - uses: softprops/action-gh-release@v1
         with:
           files: |
+            dist/crow-manifest.json
             dist/*.deb
             dist/*.rpm
             dist/*.tar.gz
