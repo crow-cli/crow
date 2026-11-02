@@ -20,5 +20,7 @@ packages/crow-gui/vscodium/vscode-reh*/
 # the chat extension's bundle, built by build.sh with bun
 packages/vscode-acp/dist/
 packages/chat/dist/
+# the browser host's bundle, built by `bun run web:build`
+packages/web/dist/
 
 *.log

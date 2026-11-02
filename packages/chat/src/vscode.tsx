@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useAcpAgentCapabilities, useAcpSessionId } from "@assistant-ui/acp";
 import { useAui, useAuiState } from "@assistant-ui/react";
@@ -43,9 +43,15 @@ function ComposerStatus() {
  */
 function VscodeBridge() {
   const aui = useAui();
-  const threads = useAuiState((s) => s.threads.threadItems);
+  const items = useAuiState((s) => s.threads.threadItems);
+  const ids = useAuiState((s) => s.threads.threadIds);
   const activeId = useAcpSessionId();
   const canDelete = useAcpAgentCapabilities()?.sessionCapabilities?.delete != null;
+  // `threadItems` can carry the external store's placeholder main thread, which
+  // is not a session the agent ever minted; `threadIds` is the agent's own list.
+  // The QuickPick mirrors the agent, so it follows `threadIds` — and the memo
+  // keeps the effect below from reposting on every render.
+  const threads = useMemo(() => items.filter((item) => ids.includes(item.id)), [items, ids]);
   useEffect(() => {
     vscode.postMessage({
       type: "threads",
