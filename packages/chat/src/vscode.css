@@ -38,6 +38,15 @@ button:focus-visible, textarea:focus-visible, input:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
 }
+/* The workbench injects `code { background-color: var(--vscode-textPreformat-background) }`
+   into every webview. On the inline <code> inside a terminal cell or a fence
+   that paints a highlight box on every line box; the app's own surfaces carry
+   the color. Unlayered so it beats the injected vscode-default layer, scoped
+   to pre so inline code chips keep their bg-muted. */
+pre code {
+  background-color: transparent;
+  color: inherit;
+}
 .vscode-high-contrast [data-slot="acp-tool-diff"],
 .vscode-high-contrast-light [data-slot="acp-tool-diff"] {
   border: 1px solid var(--vscode-contrastBorder);
