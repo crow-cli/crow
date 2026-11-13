@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { Backend } from "./backend.js";
 
 type SessionRow = { id: string; title?: string; updatedAt?: string; isRunning: boolean };
 type SessionState = { rows: SessionRow[]; activeId?: string; canDelete: boolean };
@@ -44,6 +45,15 @@ function sessionItems(state: SessionState): SessionItem[] {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+  const output = vscode.window.createOutputChannel("Crow ACP");
+  const startupConfig = vscode.workspace.getConfiguration("crowAcp");
+  const backend = new Backend({
+    log: (line) => output.appendLine(line),
+    cliCommand: startupConfig.get<string[]>("cliCommand") ?? ["crow-cli"],
+    firstPort: startupConfig.get<number>("port") ?? 2771,
+    external: startupConfig.get<string>("backend") === "external" ? startupConfig.get<string>("endpoint") : undefined,
+  });
+  let backendError: string | undefined;
   let panel: vscode.WebviewPanel | undefined;
   type ChatEntry = { host: "editor" | "sidebar"; cleanup: vscode.Disposable; sessions: SessionState };
   const webviews = new Map<vscode.Webview, ChatEntry>();
@@ -61,10 +71,18 @@ export function activate(context: vscode.ExtensionContext) {
       webview.html = '<html><body><p>Open a workspace folder or set <code>crowAcp.cwd</code> to use Crow ACP Chat.</p></body></html>';
       return;
     }
+    const endpoint = backend.endpoint;
+    if (!endpoint) {
+      const note = backendError
+        ? `Crow backend failed to start: ${backendError.replace(/</g, "&lt;")} See the "Crow ACP" output channel.`
+        : "Starting Crow backend\u2026";
+      webview.html = `<html><body><p>${note}</p></body></html>`;
+      return;
+    }
     const uri = (file: string) => webview.asWebviewUri(vscode.Uri.joinPath(root, file));
     const settings = JSON.stringify({
       host,
-      endpoint: config.get<string>("endpoint"),
+      endpoint,
       cwd,
       protocol: config.get<string>("protocol"),
       mcpConfig: config.get<string>("mcpConfig"),
@@ -170,6 +188,8 @@ export function activate(context: vscode.ExtensionContext) {
     pick.show();
   }
   context.subscriptions.push(
+    output,
+    backend,
     vscode.window.registerWebviewViewProvider("crowAcp.sidebar", {
       resolveWebviewView(view) {
         configure(view, "sidebar");
@@ -207,5 +227,13 @@ export function activate(context: vscode.ExtensionContext) {
       panel?.dispose();
       for (const { cleanup } of webviews.values()) cleanup.dispose();
     } },
+  );
+  void backend.start().then(
+    () => renderAll(),
+    (err: unknown) => {
+      backendError = err instanceof Error ? err.message : String(err);
+      output.appendLine(`[backend] start failed: ${backendError}`);
+      renderAll();
+    },
   );
 }

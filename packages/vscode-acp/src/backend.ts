@@ -1,0 +1,518 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import * as net from "node:net";
+import { WebSocketServer, WebSocket } from "ws";
+
+/** What the shim knows about one agent session, from state_update alone. */
+export type SessionInfo = {
+  sessionId: string;
+  state: string;
+  stopReason?: string;
+  cwd?: string;
+  updatedAt: number;
+};
+
+export type BackendOptions = {
+  log: (line: string) => void;
+  /** argv that runs crow-cli, e.g. ["uv", "--project", "<src>", "run", "crow-cli"]. */
+  cliCommand: string[];
+  firstPort: number;
+  /** Proxy this daemon instead of spawning one. */
+  external?: string;
+  /** Extra argv appended after `acp2 --http --host --port` (e.g. --model). */
+  extraArgs?: string[];
+};
+
+class Emitter<T> {
+  private listeners = new Set<(value: T) => void>();
+  readonly event = (cb: (value: T) => void): (() => void) => {
+    this.listeners.add(cb);
+    return () => this.listeners.delete(cb);
+  };
+  fire(value: T): void {
+    for (const cb of [...this.listeners]) cb(value);
+  }
+  dispose(): void {
+    this.listeners.clear();
+  }
+}
+
+class MethodError extends Error {
+  constructor(readonly code: number, message: string) {
+    super(message);
+  }
+}
+
+type Pending = { resolve: (value: any) => void; reject: (err: Error) => void };
+type TurnWaiter = Pending & { cancel: () => void };
+
+/**
+ * One upstream daemon connection, optionally paired with a downstream webview
+ * socket. Frames pass through verbatim; the backend parses copies to track
+ * sessions. Shim-originated requests use string ids (`crow-shim-N`) so they
+ * cannot collide with the webview's numeric id counter, and their responses
+ * are consumed here instead of reaching the webview.
+ */
+class Conn {
+  private upOpen = false;
+  private queue: string[] = [];
+  readonly pending = new Map<string, Pending>();
+  readonly pendingNew = new Map<number | string, string | undefined>();
+  readonly pendingResume = new Map<number | string, string>();
+  readonly pendingClose = new Map<number | string, string>();
+  private nextId = 0;
+  closed = false;
+  readonly owned = new Set<string>();
+
+  constructor(
+    private readonly backend: Backend,
+    readonly down: WebSocket | null,
+    readonly up: WebSocket,
+  ) {
+    up.on("open", () => {
+      this.upOpen = true;
+      for (const frame of this.queue) this.up.send(frame);
+      this.queue.length = 0;
+    });
+    up.on("message", (data) => this.backend.onUpstreamFrame(this, data.toString()));
+    up.on("close", () => {
+      this.closed = true;
+      for (const p of this.pending.values()) p.reject(new Error("connection closed"));
+      this.pending.clear();
+      this.backend.onConnClosed(this);
+      this.down?.close(1011, "crow daemon connection closed");
+    });
+    up.on("error", (err) => {
+      this.backend.log(`upstream error: ${err.message}`);
+      if (this.down?.readyState === WebSocket.OPEN) this.down.close(1011, "crow daemon unreachable");
+    });
+    if (down) {
+      down.on("message", (data) => this.backend.onDownstreamFrame(this, data.toString()));
+      down.on("close", () => {
+        this.backend.clients.delete(down);
+        this.up.close();
+      });
+      down.on("error", () => this.up.close());
+    }
+  }
+
+  opened(): Promise<void> {
+    if (this.upOpen) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      this.up.once("open", resolve);
+      this.up.once("error", reject);
+    });
+  }
+
+  sendText(text: string): void {
+    if (this.upOpen) this.up.send(text);
+    else this.queue.push(text);
+  }
+
+  request(method: string, params: unknown): Promise<any> {
+    const id = `crow-shim-${this.nextId++}`;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.sendText(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+    });
+  }
+
+  notify(method: string, params: unknown): void {
+    this.sendText(JSON.stringify({ jsonrpc: "2.0", method, params }));
+  }
+
+  respond(id: number | string, result: unknown): void {
+    this.up.send(JSON.stringify({ jsonrpc: "2.0", id, result }));
+  }
+
+  respondError(id: number | string, code: number, message: string): void {
+    this.up.send(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }));
+  }
+}
+
+/**
+ * The window's coordination shim. Spawns one multi-tenant `crow-cli acp2
+ * --http` daemon (cycling ports until one binds) and proxies every webview
+ * ACP connection through itself, because ACP only sends session updates to
+ * the owning connection — a shim off to the side would see nothing.
+ *
+ * Coordination rides extension methods, answered here in both directions:
+ * `_crow/backend/status`, `_crow/backend/prompt` (a session/prompt wrapper
+ * that settles on the turn's idle state_update) and `_crow/backend/cancel`
+ * (session/cancel). Prompts route through the connection that owns the
+ * session so its webview keeps seeing updates; orphaned sessions are resumed
+ * on a shim-held control connection. The daemon lives and dies with the
+ * window: dispose() kills it.
+ */
+export class Backend {
+  private child?: ChildProcess;
+  private daemonPort?: number;
+  private upstreamUrl?: string;
+  private wss?: WebSocketServer;
+  private proxyPort?: number;
+  private controlConn?: Conn;
+  private controlStarting?: Promise<Conn>;
+  private starting?: Promise<string>;
+  private disposed = false;
+  readonly clients = new Set<WebSocket>();
+  readonly conns = new Set<Conn>();
+  private readonly owners = new Map<string, Conn>();
+  private readonly sessions = new Map<string, SessionInfo>();
+  private readonly turnWaiters = new Map<string, TurnWaiter[]>();
+  private readonly idle = new Emitter<SessionInfo>();
+  /** Fires when a working session goes idle with a stop reason. */
+  readonly onSessionIdle = this.idle.event;
+
+  constructor(private readonly opts: BackendOptions) {}
+
+  get endpoint(): string | undefined {
+    return this.proxyPort ? `ws://127.0.0.1:${this.proxyPort}/acp` : undefined;
+  }
+
+  start(): Promise<string> {
+    this.starting ??= this.doStart().catch((err) => {
+      this.starting = undefined;
+      throw err;
+    });
+    return this.starting;
+  }
+
+  status(): Record<string, unknown> {
+    return {
+      daemon: this.opts.external
+        ? { external: this.opts.external }
+        : { pid: this.child?.pid, port: this.daemonPort, running: this.child != null && this.child.exitCode === null },
+      proxy: { port: this.proxyPort, endpoint: this.endpoint },
+      control: { connected: this.controlConn != null && !this.controlConn.closed },
+      sessions: [...this.sessions.values()],
+    };
+  }
+
+  private async doStart(): Promise<string> {
+    this.upstreamUrl = this.opts.external ?? (await this.spawnDaemon());
+    if (this.disposed) throw new Error("backend disposed during startup");
+    const wss = new WebSocketServer({ host: "127.0.0.1", port: 0, path: "/acp" });
+    await new Promise<void>((resolve, reject) => {
+      wss.once("listening", resolve);
+      wss.once("error", reject);
+    });
+    this.wss = wss;
+    this.proxyPort = (wss.address() as net.AddressInfo).port;
+    wss.on("connection", (down) => {
+      this.clients.add(down);
+      const conn = new Conn(this, down, new WebSocket(this.upstreamUrl!));
+      this.conns.add(conn);
+    });
+    this.log(`proxy listening on ${this.endpoint} -> ${this.upstreamUrl}`);
+    return this.endpoint!;
+  }
+
+  private async spawnDaemon(): Promise<string> {
+    const [cmd, ...prefix] = this.opts.cliCommand;
+    if (!cmd) throw new Error("cliCommand is empty");
+    const last = this.opts.firstPort + PORT_ATTEMPTS - 1;
+    for (let port = this.opts.firstPort; port <= last; port++) {
+      if (this.disposed) throw new Error("backend disposed during startup");
+      if (!(await portFree(port))) {
+        this.log(`port ${port} busy, trying next`);
+        continue;
+      }
+      const argv = [...prefix, "acp2", "--http", "--host", "127.0.0.1", "--port", String(port), ...(this.opts.extraArgs ?? [])];
+      const child = spawn(cmd, argv, { stdio: ["ignore", "pipe", "pipe"] });
+      let spawnError: Error | undefined;
+      child.once("error", (err) => { spawnError = err; });
+      child.stdout!.on("data", (d) => this.log(`[daemon] ${d.toString().trimEnd()}`));
+      child.stderr!.on("data", (d) => this.log(`[daemon] ${d.toString().trimEnd()}`));
+      const ready = await waitReady(port, child);
+      if (spawnError) throw new Error(`cannot spawn ${cmd}: ${spawnError.message}`);
+      if (!ready || this.disposed) {
+        child.kill("SIGKILL");
+        if (this.disposed) throw new Error("backend disposed during startup");
+        this.log(`daemon on port ${port} never became ready, trying next`);
+        continue;
+      }
+      this.child = child;
+      this.daemonPort = port;
+      child.once("exit", (code, signal) => {
+        this.log(`daemon exited (code=${code} signal=${signal})`);
+        this.child = undefined;
+        for (const ws of this.clients) ws.close(1011, "crow daemon exited");
+      });
+      this.log(`daemon pid ${child.pid} on port ${port}`);
+      return `ws://127.0.0.1:${port}/acp`;
+    }
+    throw new Error(`no free port for the crow daemon in ${this.opts.firstPort}..${last}`);
+  }
+
+  // -- frame paths ---------------------------------------------------------
+
+  /** @internal */ onDownstreamFrame(conn: Conn, text: string): void {
+    let msg: any;
+    try { msg = JSON.parse(text); } catch { conn.sendText(text); return; }
+    if (typeof msg?.method === "string" && msg.method.startsWith("_crow/backend/")) {
+      if (msg.id == null) return;
+      void this.dispatch(msg.method, msg.params).then(
+        (result) => conn.down?.send(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result })),
+        (err) => conn.down?.send(JSON.stringify({
+          jsonrpc: "2.0", id: msg.id,
+          error: { code: err instanceof MethodError ? err.code : -32603, message: String(err?.message ?? err) },
+        })),
+      );
+      return;
+    }
+    this.observeClient(conn, msg);
+    conn.sendText(text);
+  }
+
+  /** @internal */ onUpstreamFrame(conn: Conn, text: string): void {
+    let msg: any;
+    try { msg = JSON.parse(text); } catch { if (conn.down?.readyState === WebSocket.OPEN) conn.down.send(text); return; }
+    if (msg?.id != null && conn.pending.has(msg.id)) {
+      const p = conn.pending.get(msg.id)!;
+      conn.pending.delete(msg.id);
+      if (msg.error) p.reject(new Error(msg.error.message ?? "request failed"));
+      else p.resolve(msg.result);
+      return;
+    }
+    if (typeof msg?.method === "string" && msg.method.startsWith("_crow/backend/") && msg.id != null) {
+      void this.dispatch(msg.method, msg.params).then(
+        (result) => conn.respond(msg.id, result),
+        (err) => conn.respondError(msg.id, err instanceof MethodError ? err.code : -32603, String(err?.message ?? err)),
+      );
+      return;
+    }
+    this.observeAgent(conn, msg);
+    if (conn.down?.readyState === WebSocket.OPEN) conn.down.send(text);
+  }
+
+  /** @internal */ onConnClosed(conn: Conn): void {
+    this.conns.delete(conn);
+    if (conn === this.controlConn) this.controlConn = undefined;
+    for (const sessionId of conn.owned) {
+      if (this.owners.get(sessionId) === conn) this.owners.delete(sessionId);
+      this.rejectTurns(sessionId, "owning connection closed");
+    }
+    conn.owned.clear();
+  }
+
+  private async dispatch(method: string, params: any): Promise<unknown> {
+    switch (method) {
+      case "_crow/backend/status": return this.status();
+      case "_crow/backend/prompt": return await this.prompt(params ?? {});
+      case "_crow/backend/cancel": return await this.cancel(params ?? {});
+      default: throw new MethodError(-32601, `Method not supported: ${method}`);
+    }
+  }
+
+  // -- coordination wrappers -----------------------------------------------
+
+  /** Wrap session/prompt: route through the owning connection (or resume the
+   * session on the control connection), ack, then settle on the turn's idle
+   * state_update. Park idles carry no stopReason and do not settle it. */
+  async prompt(params: { sessionId?: string; prompt?: unknown; cwd?: string }): Promise<{ stopReason: string }> {
+    const sessionId = params?.sessionId;
+    if (typeof sessionId !== "string") throw new MethodError(-32602, "prompt requires sessionId");
+    if (params.prompt == null) throw new MethodError(-32602, "prompt requires prompt");
+    let conn = this.owners.get(sessionId);
+    if (!conn || conn.closed) {
+      conn = await this.control();
+      const cwd = params.cwd ?? this.sessions.get(sessionId)?.cwd;
+      if (!cwd) throw new MethodError(-32602, `no cwd known for session ${sessionId}; pass cwd`);
+      await conn.request("session/resume", { sessionId, cwd });
+      this.owners.set(sessionId, conn);
+      conn.owned.add(sessionId);
+    }
+    const turn = this.waitForTurnEnd(sessionId);
+    try {
+      await conn.request("session/prompt", { sessionId, prompt: params.prompt });
+    } catch (err) {
+      turn.cancel();
+      throw err;
+    }
+    return turn.promise;
+  }
+
+  /** Wrap session/cancel. The confirmation is the idle(cancelled)
+   * state_update, which also settles any pending prompt wrapper. */
+  async cancel(params: { sessionId?: string }): Promise<Record<string, never>> {
+    const sessionId = params?.sessionId;
+    if (typeof sessionId !== "string") throw new MethodError(-32602, "cancel requires sessionId");
+    const conn = this.owners.get(sessionId) ?? (this.controlConn && !this.controlConn.closed ? this.controlConn : undefined);
+    if (!conn || conn.closed) throw new MethodError(-32602, `session ${sessionId} has no live connection`);
+    conn.notify("session/cancel", { sessionId });
+    return {};
+  }
+
+  private async control(): Promise<Conn> {
+    if (this.controlConn && !this.controlConn.closed) return this.controlConn;
+    this.controlStarting ??= (async () => {
+      const conn = new Conn(this, null, new WebSocket(this.upstreamUrl!));
+      this.conns.add(conn);
+      this.controlConn = conn;
+      await conn.opened();
+      await conn.request("initialize", { protocolVersion: 2, info: { name: "crow-backend", version: "0.1.0" } });
+      return conn;
+    })().catch((err) => {
+      this.controlStarting = undefined;
+      throw err;
+    });
+    return this.controlStarting;
+  }
+
+  private waitForTurnEnd(sessionId: string): { promise: Promise<{ stopReason: string }>; cancel: () => void } {
+    let waiter!: TurnWaiter;
+    const promise = new Promise<{ stopReason: string }>((resolve, reject) => {
+      waiter = {
+        resolve: (v) => resolve(v),
+        reject,
+        cancel: () => {
+          const list = this.turnWaiters.get(sessionId);
+          if (!list) return;
+          const i = list.indexOf(waiter);
+          if (i >= 0) list.splice(i, 1);
+        },
+      };
+      const list = this.turnWaiters.get(sessionId) ?? [];
+      list.push(waiter);
+      this.turnWaiters.set(sessionId, list);
+    });
+    return { promise, cancel: () => waiter.cancel() };
+  }
+
+  private settleTurn(sessionId: string, stopReason: string): void {
+    const list = this.turnWaiters.get(sessionId);
+    const waiter = list?.shift();
+    if (waiter) waiter.resolve({ stopReason });
+  }
+
+  private rejectTurns(sessionId: string, reason: string): void {
+    const list = this.turnWaiters.get(sessionId) ?? [];
+    this.turnWaiters.delete(sessionId);
+    for (const w of list) w.reject(new Error(reason));
+  }
+
+  // -- observation ----------------------------------------------------------
+
+  private observeClient(conn: Conn, msg: any): void {
+    if (msg?.id == null || typeof msg.method !== "string") return;
+    if (msg.method === "session/new") conn.pendingNew.set(msg.id, msg.params?.cwd);
+    else if (msg.method === "session/resume") conn.pendingResume.set(msg.id, msg.params?.sessionId);
+    else if (msg.method === "session/close") conn.pendingClose.set(msg.id, msg.params?.sessionId);
+  }
+
+  private observeAgent(conn: Conn, msg: any): void {
+    if (msg?.id != null) {
+      if (conn.pendingNew.has(msg.id)) {
+        const cwd = conn.pendingNew.get(msg.id);
+        conn.pendingNew.delete(msg.id);
+        const sessionId = msg.result?.sessionId;
+        if (typeof sessionId === "string") {
+          this.owners.set(sessionId, conn);
+          conn.owned.add(sessionId);
+          this.setState(sessionId, "idle", undefined, typeof cwd === "string" ? cwd : undefined);
+        }
+        return;
+      }
+      if (conn.pendingResume.has(msg.id)) {
+        const sessionId = conn.pendingResume.get(msg.id)!;
+        conn.pendingResume.delete(msg.id);
+        if (!msg.error && typeof sessionId === "string") {
+          this.owners.set(sessionId, conn);
+          conn.owned.add(sessionId);
+        }
+        return;
+      }
+      if (conn.pendingClose.has(msg.id)) {
+        const sessionId = conn.pendingClose.get(msg.id)!;
+        conn.pendingClose.delete(msg.id);
+        if (!msg.error && typeof sessionId === "string") {
+          if (this.owners.get(sessionId) === conn) this.owners.delete(sessionId);
+          conn.owned.delete(sessionId);
+          this.sessions.delete(sessionId);
+        }
+        return;
+      }
+      return;
+    }
+    if (msg?.method !== "session/update") return;
+    const { sessionId, update } = msg.params ?? {};
+    if (typeof sessionId !== "string" || update?.sessionUpdate !== "state_update") return;
+    this.setState(sessionId, update.state, update.stopReason ?? undefined);
+  }
+
+  private setState(sessionId: string, state: string, stopReason?: string, cwd?: string): void {
+    const prev = this.sessions.get(sessionId);
+    const info: SessionInfo = {
+      sessionId, state, stopReason,
+      cwd: cwd ?? prev?.cwd,
+      updatedAt: Date.now(),
+    };
+    this.sessions.set(sessionId, info);
+    if (state !== "idle") return;
+    if (stopReason != null) this.settleTurn(sessionId, stopReason);
+    if (prev != null && prev.state !== "idle") {
+      this.log(`session ${sessionId} idle${stopReason ? ` (${stopReason})` : ""}`);
+      this.idle.fire(info);
+    }
+  }
+
+  log(line: string): void {
+    this.opts.log(`[backend] ${line}`);
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const conn of this.conns) {
+      conn.down?.close(1001, "window closed");
+      conn.up.close();
+    }
+    this.conns.clear();
+    for (const ws of this.clients) ws.close(1001, "window closed");
+    this.clients.clear();
+    this.wss?.close();
+    for (const sessionId of [...this.turnWaiters.keys()]) this.rejectTurns(sessionId, "backend disposed");
+    this.idle.dispose();
+    const child = this.child;
+    if (child && child.exitCode === null) {
+      child.kill("SIGTERM");
+      const force = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 3000);
+      force.unref();
+    }
+  }
+}
+
+const PORT_ATTEMPTS = 64;
+const READY_TIMEOUT_MS = 30_000;
+
+function portFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.once("error", () => resolve(false));
+    probe.listen(port, "127.0.0.1", () => probe.close(() => resolve(true)));
+  });
+}
+
+/** True once the daemon accepts TCP; false if it exits or errors first. */
+function waitReady(port: number, child: ChildProcess): Promise<boolean> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + READY_TIMEOUT_MS;
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      clearInterval(timer);
+      child.removeListener("exit", finishFalse);
+      child.removeListener("error", finishFalse);
+      resolve(ok);
+    };
+    const finishFalse = () => finish(false);
+    child.once("exit", finishFalse);
+    child.once("error", finishFalse);
+    const timer = setInterval(() => {
+      if (Date.now() > deadline) return finish(false);
+      const sock = net.connect(port, "127.0.0.1");
+      sock.once("connect", () => { sock.destroy(); finish(true); });
+      sock.once("error", () => sock.destroy());
+    }, 150);
+  });
+}

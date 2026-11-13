@@ -93,10 +93,27 @@
     "configuration": {
       "title": "Crow ACP",
       "properties": {
+        "crowAcp.backend": {
+          "type": "string",
+          "enum": ["spawn", "external"],
+          "default": "spawn",
+          "description": "spawn: the extension starts a crow-cli acp2 daemon for this window and stops it when the window closes. external: proxy crowAcp.endpoint instead. Applies on window reload."
+        },
+        "crowAcp.cliCommand": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["crow-cli"],
+          "description": "argv that runs crow-cli for the spawned daemon, e.g. [\"uv\", \"--project\", \"/path/to/crow-cli\", \"run\", \"crow-cli\"] to run from a source checkout. Applies on window reload."
+        },
+        "crowAcp.port": {
+          "type": "number",
+          "default": 2771,
+          "description": "First port tried when spawning the daemon; cycles upward until one is free. Applies on window reload."
+        },
         "crowAcp.endpoint": {
           "type": "string",
           "default": "ws://127.0.0.1:2771/acp",
-          "description": "Local ACP WebSocket endpoint, reached directly by the chat webview."
+          "description": "ACP WebSocket endpoint of an existing daemon, used when crowAcp.backend is external. The chat webview connects through the extension's local proxy either way."
         },
         "crowAcp.cwd": {
           "type": "string",
@@ -124,10 +141,16 @@
   "scripts": {
     "build": "bun build src/extension.ts --target=node --format=cjs --external=vscode --outfile=dist/extension.cjs && bun ../chat/node_modules/vite/bin/vite.js build --config vite.config.ts",
     "typecheck": "tsc --noEmit && bun run --cwd ../chat typecheck",
+    "test": "bun test test/unit",
+    "test:integration": "bun test test/integration --timeout 120000",
     "package": "bun run build && vsce package --no-dependencies --allow-missing-repository --out crow-acp-0.1.0.vsix"
   },
   "type": "module",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
   "devDependencies": {
+    "@types/ws": "^8.5.0",
     "vite": "^8.3.2",
     "@vitejs/plugin-react": "^6.1.1",
     "@tailwindcss/vite": "^4.3.3",
