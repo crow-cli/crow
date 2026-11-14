@@ -13,8 +13,8 @@ Base committed: 49b833b (shim + prompt/cancel wrappers, 18 unit / 4 integration 
 - [x] Coordination MCP served BY the shim over HTTP (Streamable HTTP at /mcp on the proxy's http server): crow_status, crow_prompt (rlm-style delegation: prompt another session, settle on its idle, return its final assistant message), crow_cancel. Same internals as _crow/backend/*.
 - [x] Conductor/worker ping-pong on the shim: loop state (armed conductor+worker sessions, who-called-who, per-turn tool tracking), prompt_worker MCP tool, auto-handoff of worker's last assistant message to conductor on worker idle(end_turn), reprimand prompt when conductor ends a turn without prompt_worker, no iteration ceiling, disarm stops. DONE 2026-11-13: unit 42/42 (6-cycle exact handoff, reprimand, disarm), integration 8/8 on qwen4-max (3 live cycles in 39s).
 - [x] Webview auto-injection of the shim MCP url (discovered scope: the proxy port is per-window, so crowAcp.mcpConfig cannot name it; extension passes mcpEndpoint, chat webview appends the crow-backend http server). Needed for the phase-3 e2e conductor.
-- [ ] Tests for all of the above: unit over FakeAgent (deterministic), integration over real source-spawned daemon + local model, e2e smoke extension for the loop.
-- [ ] Commit each phase with Session-Id trailer.
+- [x] Tests for all of the above: unit over FakeAgent (deterministic), integration over real source-spawned daemon + qwen4-max, e2e smoke extension for the loop. DONE 2026-11-13: unit 42/42, integration 8/8 (89s), e2e SMOKE PASS (e2e/ide-smoke.ts, stream B authored, stream A verified on phase-3 build).
+- [x] Commit each phase with Session-Id trailer. DONE: 49b833b base, b61b365 phase 1, 7331b32 + 5cee4b3 phase 2, 1a3c1bf phase 3 (+ e2e commit).
 
 ## Interpretation note (derived, not asked)
 
@@ -26,7 +26,7 @@ Base committed: 49b833b (shim + prompt/cancel wrappers, 18 unit / 4 integration 
 - Workspace /tmp/crow-ide-test, settings: crowAcp.cliCommand = [uv, --project, /home/thomas/.agents/crow/src/crow-cli, run, crow-cli], port 2771.
 - Manual daemon pid 15853 holds 2771 (prior session) -> shim must cycle to 2772.
 - Trust is browser-side: Manage -> getByText("Trust", {exact:true}).
-- Smoke script lives in kernel as smoke_v2 (was packages/web/e2e/ide-smoke.ts, deleted after green run; recreate to rerun).
+- Smoke script: packages/vscode-acp/e2e/ide-smoke.ts (stream B; run with `bun e2e/ide-smoke.ts` from packages/vscode-acp). SMOKE PASS on qwen4-max 2026-11-13 20:58.
 - Integration model: qwen4-max (user directive 2026-11-13; crow-cli config resolves credentials, no env key needed; remote, parallel-safe). Never system crow binaries, never Astra.
 
 ## Deferred (reason recorded)
