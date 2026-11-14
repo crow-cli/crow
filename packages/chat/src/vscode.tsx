@@ -18,8 +18,14 @@ const settings = JSON.parse(document.getElementById("crow-acp-settings")!.textCo
   cwd: string;
   protocol: "auto" | "1" | "2";
   mcpConfig: string;
+  mcpEndpoint?: string;
 };
 const mcp = parseMcpConfig(settings.mcpConfig);
+// The shim's coordination tools ride the proxy's own port, which is minted
+// per window — the extension hands it over so no static config can know it.
+const mcpServers = settings.mcpEndpoint && !mcp.servers.some((s) => s.name === "crow-backend")
+  ? [...mcp.servers, { type: "http" as const, name: "crow-backend", url: settings.mcpEndpoint, headers: [] }]
+  : mcp.servers;
 
 /**
  * Model and context ride the composer's action row instead of a footer, so the
@@ -101,7 +107,7 @@ function App() {
   if (mcp.error) return <p role="alert">Invalid MCP configuration: {mcp.error}</p>;
   return (
     <div className={`${dark ? "dark" : ""} h-full`}>
-      <ChatSession url={settings.endpoint} cwd={settings.cwd} mcpServers={mcp.servers} protocol={settings.protocol === "auto" ? "auto" : Number(settings.protocol) as 1 | 2}>
+      <ChatSession url={settings.endpoint} cwd={settings.cwd} mcpServers={mcpServers} protocol={settings.protocol === "auto" ? "auto" : Number(settings.protocol) as 1 | 2}>
         {(error) => (
           <>
             <main aria-label="Crow ACP Chat" data-host={settings.host} className="crow-chat-layout flex h-full min-h-0 min-w-0 flex-col">

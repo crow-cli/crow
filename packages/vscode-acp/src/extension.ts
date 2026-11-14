@@ -86,6 +86,7 @@ export function activate(context: vscode.ExtensionContext) {
       cwd,
       protocol: config.get<string>("protocol"),
       mcpConfig: config.get<string>("mcpConfig"),
+      mcpEndpoint: backend.mcpEndpoint,
     }).replace(/</g, "\\u003c");
     const nonce = Array.from({ length: 24 }, () => Math.floor(Math.random() * 36).toString(36)).join("");
     webview.html = `<!DOCTYPE html>

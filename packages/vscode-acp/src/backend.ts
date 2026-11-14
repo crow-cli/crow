@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as net from "node:net";
 import { watchPid, pidForPort, type PidWatcher } from "./pidfd.js";
+import { attachMcp } from "./mcp.js";
+import * as http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 
 /** What the shim knows about one agent session, from state_update alone. */
@@ -154,6 +156,7 @@ export class Backend {
   private externalDead = false;
   private upstreamUrl?: string;
   private wss?: WebSocketServer;
+  private httpServer?: http.Server;
   private proxyPort?: number;
   private controlConn?: Conn;
   private controlStarting?: Promise<Conn>;
@@ -177,6 +180,10 @@ export class Backend {
     return this.proxyPort ? `ws://127.0.0.1:${this.proxyPort}/acp` : undefined;
   }
 
+  get mcpEndpoint(): string | undefined {
+    return this.proxyPort ? `http://127.0.0.1:${this.proxyPort}/mcp` : undefined;
+  }
+
   start(): Promise<string> {
     this.starting ??= this.doStart().catch((err) => {
       this.starting = undefined;
@@ -195,7 +202,7 @@ export class Backend {
             running: this.externalPid != null ? !this.externalDead : undefined,
           }
         : { pid: this.child?.pid, port: this.daemonPort, running: this.child != null && this.child.exitCode === null },
-      proxy: { port: this.proxyPort, endpoint: this.endpoint },
+      proxy: { port: this.proxyPort, endpoint: this.endpoint, mcp: this.mcpEndpoint },
       control: { connected: this.controlConn != null && !this.controlConn.closed },
       sessions: [...this.sessions.values()],
     };
@@ -216,13 +223,16 @@ export class Backend {
         this.log(`no readable listener for external endpoint ${this.opts.external}; death detection falls back to the socket`);
       }
     }
-    const wss = new WebSocketServer({ host: "127.0.0.1", port: 0, path: "/acp" });
+    const httpServer = http.createServer();
+    attachMcp(httpServer, this);
+    const wss = new WebSocketServer({ server: httpServer, path: "/acp" });
     await new Promise<void>((resolve, reject) => {
-      wss.once("listening", resolve);
-      wss.once("error", reject);
+      httpServer.once("error", reject);
+      httpServer.listen(0, "127.0.0.1", resolve);
     });
+    this.httpServer = httpServer;
     this.wss = wss;
-    this.proxyPort = (wss.address() as net.AddressInfo).port;
+    this.proxyPort = (httpServer.address() as net.AddressInfo).port;
     wss.on("connection", (down) => {
       this.clients.add(down);
       const conn = new Conn(this, down, new WebSocket(this.upstreamUrl!));
@@ -540,6 +550,7 @@ export class Backend {
     for (const ws of this.clients) ws.close(1001, "window closed");
     this.clients.clear();
     this.wss?.close();
+    this.httpServer?.close();
     this.daemonWatcher?.stop();
     for (const sessionId of [...this.turnWaiters.keys()]) this.rejectTurns(sessionId, "backend disposed");
     this.idle.dispose();
