@@ -6,6 +6,7 @@ export type McpBackend = {
   status(): Record<string, unknown>;
   prompt(params: { sessionId?: string; prompt?: unknown; cwd?: string }): Promise<{ stopReason: string }>;
   cancel(params: { sessionId?: string }): Promise<Record<string, never>>;
+  promptWorker(params: { prompt?: unknown }): Promise<{ accepted: true }>;
 };
 
 const PROTOCOL_VERSION = "2025-06-18";
@@ -30,6 +31,17 @@ const TOOLS = [
         cwd: { type: "string", description: "Working directory; needed only when the backend has never seen the session." },
       },
       required: ["sessionId", "prompt"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "prompt_worker",
+    description:
+      "Conductor/worker loop: send a prompt to the worker session and return once it accepts. The worker's answer comes back to you automatically as a new prompt when its turn ends — call this tool every turn to keep the loop going.",
+    inputSchema: {
+      type: "object",
+      properties: { prompt: { type: "string", description: "The instruction for the worker." } },
+      required: ["prompt"],
       additionalProperties: false,
     },
   },
@@ -61,6 +73,8 @@ async function callTool(backend: McpBackend, name: string, args: any): Promise<u
     }
     case "crow_cancel":
       return backend.cancel({ sessionId: args.sessionId });
+    case "prompt_worker":
+      return backend.promptWorker({ prompt: args.prompt });
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

@@ -105,6 +105,11 @@
           "default": ["crow-cli"],
           "description": "argv that runs crow-cli for the spawned daemon, e.g. [\"uv\", \"--project\", \"/path/to/crow-cli\", \"run\", \"crow-cli\"] to run from a source checkout. Applies on window reload."
         },
+        "crowAcp.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model for the spawned daemon (passed as --model). Empty uses crow-cli's configured default. Applies on window reload."
+        },
         "crowAcp.port": {
           "type": "number",
           "default": 2771,

@@ -61,7 +61,7 @@ describe("MCP streamable HTTP endpoint", () => {
     const sid = await init(mcpUrl);
     const r = await rpc(mcpUrl, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid);
     expect(r.status).toBe(200);
-    expect(r.body.result.tools.map((t: any) => t.name)).toEqual(["crow_status", "crow_prompt", "crow_cancel"]);
+    expect(r.body.result.tools.map((t: any) => t.name)).toEqual(["crow_status", "crow_prompt", "prompt_worker", "crow_cancel"]);
   });
 
   test("requests without a live session are 404; GET is 405", async () => {
@@ -122,7 +122,7 @@ describe("MCP streamable HTTP endpoint", () => {
     expect(status.proxy.mcp).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
     const sid = await init(status.proxy.mcp);
     const r = await rpc(status.proxy.mcp, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid);
-    expect(r.body.result.tools.length).toBe(3);
+    expect(r.body.result.tools.length).toBe(4);
     const client = new TestClient(endpoint);
     cleanups.push(() => client.close());
     const res = await client.request("session/new", { cwd: "/tmp", mcpServers: [] });

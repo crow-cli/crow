@@ -7,9 +7,9 @@ Build/gate (run from /home/thomas/src/crow-backend/packages/vscode-acp):
 
     bun run build && bun run typecheck && bun test test/unit
 
-Integration gate (real daemon from source, local model):
+Integration gate (real daemon from source, model qwen4-max — user directive; crow-cli config resolves the key, no env needed):
 
-    LLAMACPP_API_KEY=... bun test test/integration --timeout 120000
+    bun test test/integration --timeout 600000
 
 Trajectory: 1 -> 2 -> 3. Commit at each phase boundary, trailer Session-Id: impartial-gabby-mole-of-dignity.
 
@@ -18,7 +18,8 @@ LANES (two live streams of this session are working the sprint; coordinate here,
 - Stream B (goal continuation, "verification stream"): 2.1 transcript accumulation — owns test/unit/transcript.test.ts (pre-staged, skipped until implemented) and the backend.ts observation edits for it.
 - Rule: stage only your own files; never commit the other lane's in-progress files; re-read PLAN.md and git status before committing. Wire-up edits to backend.ts happen after the other lane's commit lands.
 - REPAIR 2026-11-13 (stream B, twice): PLAN.md and TODO.md keep getting fs-read line-number prefixes (" 1→"...) written into them verbatim — it was in b61b365 AND 5cee4b3. Stripped both times; content unchanged. THIS IS NOT STREAM B DOING IT — stream B uses edit on exact strings. The corruption comes from writing fs("read") output back to disk. RULE: edit these files with the edit subtool only; if you must rewrite wholesale, strip /^\s*\d+\u2192/ from every line first and assert no \u2192 remains before writing.
-- CLAIM 2026-11-13 (stream B): 3.4 e2e smoke. Stream A: dump your kernel smoke_v2 verbatim to packages/vscode-acp/e2e/ide-smoke.ts when convenient (one write, no edits); stream B will extend it with the loop steps and run it after 3.1-3.3 land. Stream A keeps 3.1-3.3.
+- CLAIM 2026-11-13 (stream B): 3.4 e2e smoke, in packages/vscode-acp/e2e/ide-smoke.ts. Base reconstructed from memory (no dump needed, stream A) and GREEN vs the phase-2 build. Loop extension LIVE-VERIFIED: 2 cycles, exact ping-2 handoff, disarm, reload-kill, zero page errors. Only the final orphan check failed — findProxy had grabbed stream A's concurrent test daemon (port 35995); fixed to match the window's daemon port range 2771..2834. Stream A keeps 3.1-3.3.
+- MODEL SERVER: superseded 2026-11-13 by user directive — live tests now use qwen4-max (remote, crow-cli config resolves credentials). The single-slot llamacpp lane constraint is GONE; parallel live runs are fine. Keep prompts trivially simple, no runaway loops. Stream B's 3.4 smoke rerun was GREEN (SMOKE PASS, 2 cycles, no orphans) on the local model before the switch.
 
 ## Phase 1 — pidfd death watcher
 
@@ -42,14 +43,20 @@ LANES (two live streams of this session are working the sprint; coordinate here,
 - [x] 2.4 Webview auto-injection of the shim MCP url (discovered scope): Backend.mcpEndpoint getter, extension settings carry it, chat webview appends the crow-backend http server unless the user config already names it.
   DONE 2026-11-13 (stream A): typecheck + build green; live proof lands with 3.4's webview conductor.
 
+
+MODEL-SERVER LANE: obsolete — qwen4-max is remote and parallel-safe (see LANES). Stream A is running the FULL integration gate (daemon+mcp+loop) on qwen4-max; stream B may run 3.4 e2e concurrently. Loop build is in dist/ for your deploy.
+
 ## Phase 3 — conductor/worker ping-pong
 
-- [ ] 3.1 Loop state + methods: _crow/backend/loop/arm {conductorSessionId, workerSessionId}, loop/disarm, loop/status; MCP tool prompt_worker {prompt} (records the call for the conductor's current turn, prompts worker via wrapper). State: who called who, running/idle from session table, armed pair.
+- [x] 3.1 Loop state + methods: _crow/backend/loop/arm {conductorSessionId, workerSessionId}, loop/disarm, loop/status; MCP tool prompt_worker {prompt} (records the call for the conductor's current turn, prompts worker via wrapper). State: who called who, running/idle from session table, armed pair.
   Verify: unit — arm/disarm/status round-trip; prompt_worker routes to worker and is recorded; unknown session rejected.
-- [ ] 3.2 Auto-handoff + reprimand: worker idle(end_turn) while armed -> conductor gets worker's last assistant message via prompt wrapper; conductor idle(end_turn) with no prompt_worker that turn -> reprimand prompt ("[System reminder] you have to prompt worker..."). No ceiling; disarm/dispose stop; handoff turns don't re-trigger reprimand loops when disarmed mid-flight.
+  DONE 2026-11-13 (stream A): loop unit tests green (arm validation incl. unknown/same-session rejection, prompt_worker routing + per-turn recording); full unit 42/42.
+- [x] 3.2 Auto-handoff + reprimand: worker idle(end_turn) while armed -> conductor gets worker's last assistant message via prompt wrapper; conductor idle(end_turn) with no prompt_worker that turn -> reprimand prompt ("[System reminder] you have to prompt worker..."). No ceiling; disarm/dispose stop; handoff turns don't re-trigger reprimand loops when disarmed mid-flight.
   Verify: unit over FakeAgent — >= 6 ping-pong cycles, handoff text equals worker's last message exactly, reprimand fires on tool-less conductor turn, disarm halts. Existing suites green.
-- [ ] 3.3 Integration: real daemon, arm loop, >= 3 live cycles with local model, then disarm; sessions stay usable.
+  DONE 2026-11-13 (stream A): 6-cycle exact-handoff unit test, reprimand test, disarm-halts test green; full unit 42/42, build+typecheck green.
+- [x] 3.3 Integration: real daemon, arm loop, >= 3 live cycles, then disarm; sessions stay usable.
   Verify: new integration test green.
+  DONE 2026-11-13 (stream A): FULL integration gate 8/8 in 89s on qwen4-max — loop 3 live cycles + disarm + worker still usable (39s); daemon 5/5 incl. cancel (sleep 67 started, turn cancelled, session usable) and external SIGKILL death; mcp 2/2 incl. conductor delegating through the shim MCP via fastmcp client (10s).
 - [ ] 3.4 E2E: recreate smoke (kernel smoke_v2), extend — second session via proxy WS, arm loop, prompt conductor in webview, observe >= 2 cycles via shim status, reload kills daemon. Run to green vs repo-tree server (8088, grace 0).
   Verify: smoke prints SMOKE PASS; no orphan daemons after. Commit phase 3.
 

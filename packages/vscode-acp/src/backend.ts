@@ -169,6 +169,7 @@ export class Backend {
   /** Per-session assistant text for the current turn. A new messageId starts
    * a new message; `running` clears it; idle(end_turn) publishes it. */
   private readonly transcripts = new Map<string, { messageId?: string; text: string }>();
+  private loop?: { conductor: string; worker: string; cycles: number; workerCalledThisTurn: boolean };
   private readonly turnWaiters = new Map<string, TurnWaiter[]>();
   private readonly idle = new Emitter<SessionInfo>();
   /** Fires when a working session goes idle with a stop reason. */
@@ -205,6 +206,7 @@ export class Backend {
       proxy: { port: this.proxyPort, endpoint: this.endpoint, mcp: this.mcpEndpoint },
       control: { connected: this.controlConn != null && !this.controlConn.closed },
       sessions: [...this.sessions.values()],
+      loop: this.loopStatus(),
     };
   }
 
@@ -341,6 +343,9 @@ export class Backend {
       case "_crow/backend/status": return this.status();
       case "_crow/backend/prompt": return await this.prompt(params ?? {});
       case "_crow/backend/cancel": return await this.cancel(params ?? {});
+      case "_crow/backend/loop/arm": return this.loopArm(params ?? {});
+      case "_crow/backend/loop/disarm": return this.loopDisarm();
+      case "_crow/backend/loop/status": return this.loopStatus();
       default: throw new MethodError(-32601, `Method not supported: ${method}`);
     }
   }
@@ -354,15 +359,7 @@ export class Backend {
     const sessionId = params?.sessionId;
     if (typeof sessionId !== "string") throw new MethodError(-32602, "prompt requires sessionId");
     if (params.prompt == null) throw new MethodError(-32602, "prompt requires prompt");
-    let conn = this.owners.get(sessionId);
-    if (!conn || conn.closed) {
-      conn = await this.control();
-      const cwd = params.cwd ?? this.sessions.get(sessionId)?.cwd;
-      if (!cwd) throw new MethodError(-32602, `no cwd known for session ${sessionId}; pass cwd`);
-      await conn.request("session/resume", { sessionId, cwd });
-      this.owners.set(sessionId, conn);
-      conn.owned.add(sessionId);
-    }
+    const conn = await this.routeSession(sessionId, params.cwd);
     const turn = this.waitForTurnEnd(sessionId);
     try {
       await conn.request("session/prompt", { sessionId, prompt: params.prompt });
@@ -382,6 +379,86 @@ export class Backend {
     if (!conn || conn.closed) throw new MethodError(-32602, `session ${sessionId} has no live connection`);
     conn.notify("session/cancel", { sessionId });
     return {};
+  }
+
+  private async routeSession(sessionId: string, cwd?: string): Promise<Conn> {
+    let conn = this.owners.get(sessionId);
+    if (!conn || conn.closed) {
+      conn = await this.control();
+      const dir = cwd ?? this.sessions.get(sessionId)?.cwd;
+      if (!dir) throw new MethodError(-32602, `no cwd known for session ${sessionId}; pass cwd`);
+      await conn.request("session/resume", { sessionId, cwd: dir });
+      this.owners.set(sessionId, conn);
+      conn.owned.add(sessionId);
+    }
+    return conn;
+  }
+
+  // -- conductor/worker loop -------------------------------------------------
+
+  loopArm(params: { conductorSessionId?: string; workerSessionId?: string }): Record<string, unknown> {
+    const conductor = params?.conductorSessionId;
+    const worker = params?.workerSessionId;
+    if (typeof conductor !== "string" || typeof worker !== "string")
+      throw new MethodError(-32602, "arm requires conductorSessionId and workerSessionId");
+    if (conductor === worker) throw new MethodError(-32602, "conductor and worker must be different sessions");
+    for (const sid of [conductor, worker])
+      if (!this.sessions.has(sid)) throw new MethodError(-32602, `unknown session ${sid}`);
+    this.loop = { conductor, worker, cycles: 0, workerCalledThisTurn: false };
+    this.log(`loop armed: conductor ${conductor} worker ${worker}`);
+    return this.loopStatus();
+  }
+
+  loopDisarm(): Record<string, never> {
+    if (this.loop) this.log(`loop disarmed after ${this.loop.cycles} cycles`);
+    this.loop = undefined;
+    return {};
+  }
+
+  loopStatus(): Record<string, unknown> {
+    const loop = this.loop;
+    if (!loop) return { armed: false };
+    return {
+      armed: true,
+      conductor: { sessionId: loop.conductor, state: this.sessions.get(loop.conductor)?.state },
+      worker: { sessionId: loop.worker, state: this.sessions.get(loop.worker)?.state },
+      cycles: loop.cycles,
+      workerCalledThisTurn: loop.workerCalledThisTurn,
+    };
+  }
+
+  /** The conductor's MCP tool: hand work to the worker, return on the worker's
+   * ack. The answer travels back as a fresh conductor prompt when the worker's
+   * turn ends — the loop carries it, not the tool result. */
+  async promptWorker(params: { prompt?: unknown }): Promise<{ accepted: true }> {
+    const loop = this.loop;
+    if (!loop) throw new MethodError(-32602, "no loop armed");
+    if (params?.prompt == null) throw new MethodError(-32602, "prompt_worker requires prompt");
+    const prompt = typeof params.prompt === "string" ? [{ type: "text", text: params.prompt }] : params.prompt;
+    const conn = await this.routeSession(loop.worker);
+    await conn.request("session/prompt", { sessionId: loop.worker, prompt });
+    if (this.loop === loop) loop.workerCalledThisTurn = true;
+    return { accepted: true };
+  }
+
+  private onLoopIdle(info: SessionInfo): void {
+    const loop = this.loop;
+    if (!loop || info.stopReason !== "end_turn") return;
+    if (info.sessionId === loop.worker) {
+      loop.cycles += 1;
+      const message = this.transcripts.get(loop.worker)?.text ?? "";
+      this.log(`loop cycle ${loop.cycles}: worker -> conductor`);
+      void this.prompt({ sessionId: loop.conductor, prompt: [{ type: "text", text: message }] })
+        .catch((err) => this.log(`loop handoff failed: ${err.message}`));
+    } else if (info.sessionId === loop.conductor) {
+      const called = loop.workerCalledThisTurn;
+      loop.workerCalledThisTurn = false;
+      if (!called) {
+        this.log("loop: conductor ended a turn without prompt_worker — reprimand");
+        void this.prompt({ sessionId: loop.conductor, prompt: [{ type: "text", text: REPRIMAND }] })
+          .catch((err) => this.log(`loop reprimand failed: ${err.message}`));
+      }
+    }
   }
 
   private async control(): Promise<Conn> {
@@ -532,6 +609,7 @@ export class Backend {
     if (prev != null && prev.state !== "idle") {
       this.log(`session ${sessionId} idle${stopReason ? ` (${stopReason})` : ""}`);
       this.idle.fire(info);
+      this.onLoopIdle(info);
     }
   }
 
@@ -542,6 +620,7 @@ export class Backend {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.loop = undefined;
     for (const conn of this.conns) {
       conn.down?.close(1001, "window closed");
       conn.up.close();
@@ -562,6 +641,8 @@ export class Backend {
     }
   }
 }
+
+const REPRIMAND = "[System reminder] you have to prompt worker with the prompt_worker tool to continue the loop.";
 
 const PORT_ATTEMPTS = 64;
 const READY_TIMEOUT_MS = 30_000;

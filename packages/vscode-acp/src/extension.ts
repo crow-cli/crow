@@ -52,6 +52,7 @@ export function activate(context: vscode.ExtensionContext) {
     cliCommand: startupConfig.get<string[]>("cliCommand") ?? ["crow-cli"],
     firstPort: startupConfig.get<number>("port") ?? 2771,
     external: startupConfig.get<string>("backend") === "external" ? startupConfig.get<string>("endpoint") : undefined,
+    extraArgs: startupConfig.get<string>("model") ? ["--model", startupConfig.get<string>("model")!] : undefined,
   });
   let backendError: string | undefined;
   let panel: vscode.WebviewPanel | undefined;

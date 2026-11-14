@@ -10,7 +10,7 @@ import { TestClient, waitFor, sleep } from "../helpers.js";
 /** Everything runs from the crow-cli source checkout — never an installed
  * crow binary. The model is the local llamacpp server by default. */
 const CLI_SRC = process.env.CROW_CLI_SOURCE ?? "/home/thomas/.agents/crow/src/crow-cli";
-const MODEL = process.env.CROW_TEST_MODEL ?? "glm-5.3-flash";
+const MODEL = process.env.CROW_TEST_MODEL ?? "qwen4-max";
 const UV = process.env.UV_PATH ?? "/home/thomas/.cargo/bin/uv";
 
 const clients: TestClient[] = [];
@@ -40,7 +40,6 @@ function tmpCwd(): string {
 
 async function ensureStarted(): Promise<void> {
   starting ??= (async () => {
-    if (!process.env.LLAMACPP_API_KEY) throw new Error("LLAMACPP_API_KEY must be set for the local model");
     backend = new Backend({
       log: (l) => logs.push(l),
       cliCommand: [UV, "--project", CLI_SRC, "run", "crow-cli"],
@@ -178,7 +177,6 @@ describe("real daemon from source", () => {
   }, 180000);
 
   test("external mode detects death of a daemon it did not spawn", async () => {
-    if (!process.env.LLAMACPP_API_KEY) throw new Error("LLAMACPP_API_KEY must be set for the local model");
     const port = 30000 + Math.floor(Math.random() * 2000);
     const daemon = spawn(UV, [
       "--project", CLI_SRC, "run", "crow-cli",

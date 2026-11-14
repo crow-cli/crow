@@ -8,7 +8,7 @@ import { attachMcp } from "../../src/mcp.js";
 import { TestClient, waitFor, sleep } from "../helpers.js";
 
 const CLI_SRC = process.env.CROW_CLI_SOURCE ?? "/home/thomas/.agents/crow/src/crow-cli";
-const MODEL = process.env.CROW_TEST_MODEL ?? "glm-5.3-flash";
+const MODEL = process.env.CROW_TEST_MODEL ?? "qwen4-max";
 const UV = process.env.UV_PATH ?? "/home/thomas/.cargo/bin/uv";
 
 const clients: TestClient[] = [];
@@ -19,7 +19,6 @@ const logs: string[] = [];
 
 async function ensureStarted(): Promise<void> {
   starting ??= (async () => {
-    if (!process.env.LLAMACPP_API_KEY) throw new Error("LLAMACPP_API_KEY must be set for the local model");
     backend = new Backend({
       log: (l) => logs.push(l),
       cliCommand: [UV, "--project", CLI_SRC, "run", "crow-cli"],

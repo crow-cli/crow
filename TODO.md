@@ -11,7 +11,7 @@ Base committed: 49b833b (shim + prompt/cancel wrappers, 18 unit / 4 integration 
 - [x] External-mode daemon identity: resolve listening pid from endpoint port via /proc/net/tcp inode -> /proc/*/fd scan (pure Node fs, no ss dependency).
 - [x] Transcript accumulation in the proxy: per-session assistant text from agent_message_chunk, reset on running; last assistant message available for handoff/delegation results. (Whiteboard: backend owns state — who called who, who is running/idle, who needs prompting when X finishes.) DONE 2026-11-13: unit 30/30 incl. 5 transcript tests (stream B).
 - [x] Coordination MCP served BY the shim over HTTP (Streamable HTTP at /mcp on the proxy's http server): crow_status, crow_prompt (rlm-style delegation: prompt another session, settle on its idle, return its final assistant message), crow_cancel. Same internals as _crow/backend/*.
-- [ ] Conductor/worker ping-pong on the shim: loop state (armed conductor+worker sessions, who-called-who, per-turn tool tracking), prompt_worker MCP tool, auto-handoff of worker's last assistant message to conductor on worker idle(end_turn), reprimand prompt when conductor ends a turn without prompt_worker, no iteration ceiling, disarm stops.
+- [x] Conductor/worker ping-pong on the shim: loop state (armed conductor+worker sessions, who-called-who, per-turn tool tracking), prompt_worker MCP tool, auto-handoff of worker's last assistant message to conductor on worker idle(end_turn), reprimand prompt when conductor ends a turn without prompt_worker, no iteration ceiling, disarm stops. DONE 2026-11-13: unit 42/42 (6-cycle exact handoff, reprimand, disarm), integration 8/8 on qwen4-max (3 live cycles in 39s).
 - [x] Webview auto-injection of the shim MCP url (discovered scope: the proxy port is per-window, so crowAcp.mcpConfig cannot name it; extension passes mcpEndpoint, chat webview appends the crow-backend http server). Needed for the phase-3 e2e conductor.
 - [ ] Tests for all of the above: unit over FakeAgent (deterministic), integration over real source-spawned daemon + local model, e2e smoke extension for the loop.
 - [ ] Commit each phase with Session-Id trailer.
@@ -27,7 +27,7 @@ Base committed: 49b833b (shim + prompt/cancel wrappers, 18 unit / 4 integration 
 - Manual daemon pid 15853 holds 2771 (prior session) -> shim must cycle to 2772.
 - Trust is browser-side: Manage -> getByText("Trust", {exact:true}).
 - Smoke script lives in kernel as smoke_v2 (was packages/web/e2e/ide-smoke.ts, deleted after green run; recreate to rerun).
-- Integration needs LLAMACPP_API_KEY; model glm-5.3-flash; never system crow binaries, never Astra.
+- Integration model: qwen4-max (user directive 2026-11-13; crow-cli config resolves credentials, no env key needed; remote, parallel-safe). Never system crow binaries, never Astra.
 
 ## Deferred (reason recorded)
 
