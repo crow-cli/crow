@@ -1,5 +1,6 @@
 import { describe, test, expect, afterAll } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import * as net from "node:net";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -175,4 +176,49 @@ describe("real daemon from source", () => {
     expect(userText).toContain("first");
     expect(userText).toContain("second");
   }, 180000);
+
+  test("external mode detects death of a daemon it did not spawn", async () => {
+    if (!process.env.LLAMACPP_API_KEY) throw new Error("LLAMACPP_API_KEY must be set for the local model");
+    const port = 30000 + Math.floor(Math.random() * 2000);
+    const daemon = spawn(UV, [
+      "--project", CLI_SRC, "run", "crow-cli",
+      "acp2", "--http", "--host", "127.0.0.1", "--port", String(port),
+      "--model", MODEL, "--no-default-tool",
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+    try {
+      const deadline = Date.now() + 60000;
+      for (;;) {
+        const ok = await new Promise<boolean>((resolve) => {
+          const sock = net.connect(port, "127.0.0.1");
+          sock.once("connect", () => { sock.destroy(); resolve(true); });
+          sock.once("error", () => { sock.destroy(); resolve(false); });
+        });
+        if (ok) break;
+        if (Date.now() > deadline) throw new Error("external daemon never became ready");
+        await sleep(300);
+      }
+      const ext = new Backend({
+        log: (l) => logs.push(l),
+        cliCommand: [UV],
+        firstPort: port,
+        external: `ws://127.0.0.1:${port}/acp`,
+      });
+      const endpoint = await ext.start();
+      const client = new TestClient(endpoint);
+      clients.push(client);
+      await client.request("initialize", { protocolVersion: 2, info: { name: "external-it", version: "0" } });
+      await newSession(client);
+      const st = ext.status() as any;
+      // the listener is uv's python child, not uv itself
+      expect(st.daemon.pid).toBeGreaterThan(0);
+      expect(st.daemon.running).toBe(true);
+      process.kill(st.daemon.pid, "SIGKILL");
+      await waitFor(() => (ext.status() as any).daemon.running === false, "external daemon death", 5000);
+      await waitFor(() => client.isClosed, "external client closed on death", 5000);
+      ext.dispose();
+    } finally {
+      if (daemon.exitCode === null) daemon.kill("SIGKILL");
+    }
+  }, 120000);
 });
+

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as net from "node:net";
+import { watchPid, pidForPort, type PidWatcher } from "./pidfd.js";
 import { WebSocketServer, WebSocket } from "ws";
 
 /** What the shim knows about one agent session, from state_update alone. */
@@ -146,6 +147,9 @@ class Conn {
 export class Backend {
   private child?: ChildProcess;
   private daemonPort?: number;
+  private daemonWatcher?: PidWatcher;
+  private externalPid?: number;
+  private externalDead = false;
   private upstreamUrl?: string;
   private wss?: WebSocketServer;
   private proxyPort?: number;
@@ -179,7 +183,12 @@ export class Backend {
   status(): Record<string, unknown> {
     return {
       daemon: this.opts.external
-        ? { external: this.opts.external }
+        ? {
+            external: this.opts.external,
+            pid: this.externalPid,
+            port: Number(new URL(this.opts.external).port),
+            running: this.externalPid != null ? !this.externalDead : undefined,
+          }
         : { pid: this.child?.pid, port: this.daemonPort, running: this.child != null && this.child.exitCode === null },
       proxy: { port: this.proxyPort, endpoint: this.endpoint },
       control: { connected: this.controlConn != null && !this.controlConn.closed },
@@ -190,6 +199,18 @@ export class Backend {
   private async doStart(): Promise<string> {
     this.upstreamUrl = this.opts.external ?? (await this.spawnDaemon());
     if (this.disposed) throw new Error("backend disposed during startup");
+    if (this.opts.external) {
+      const port = Number(new URL(this.opts.external).port);
+      this.externalPid = pidForPort(port);
+      if (this.externalPid != null) {
+        this.daemonWatcher = watchPid(this.externalPid, () => this.onExternalDeath(), {
+          onError: (err) => this.log(`pidfd watcher: ${err.message}`),
+        });
+        this.log(`watching external daemon pid ${this.externalPid} on port ${port}`);
+      } else {
+        this.log(`no readable listener for external endpoint ${this.opts.external}; death detection falls back to the socket`);
+      }
+    }
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0, path: "/acp" });
     await new Promise<void>((resolve, reject) => {
       wss.once("listening", resolve);
@@ -241,6 +262,12 @@ export class Backend {
       return `ws://127.0.0.1:${port}/acp`;
     }
     throw new Error(`no free port for the crow daemon in ${this.opts.firstPort}..${last}`);
+  }
+
+  private onExternalDeath(): void {
+    this.externalDead = true;
+    this.log(`external daemon pid ${this.externalPid} exited`);
+    for (const ws of this.clients) ws.close(1011, "crow daemon exited");
   }
 
   // -- frame paths ---------------------------------------------------------
@@ -470,6 +497,7 @@ export class Backend {
     for (const ws of this.clients) ws.close(1001, "window closed");
     this.clients.clear();
     this.wss?.close();
+    this.daemonWatcher?.stop();
     for (const sessionId of [...this.turnWaiters.keys()]) this.rejectTurns(sessionId, "backend disposed");
     this.idle.dispose();
     const child = this.child;
