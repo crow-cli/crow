@@ -196,6 +196,7 @@
     "typecheck": "tsc --noEmit && bun run --cwd ../chat typecheck",
     "test": "bun test test/unit",
     "test:integration": "bun test test/integration --timeout 120000",
+    "test:e2e": "bun e2e/run-all.ts",
     "package": "bun run build && vsce package --no-dependencies --allow-missing-repository --out crow-acp-0.1.0.vsix"
   },
   "type": "module",

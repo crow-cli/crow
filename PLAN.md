@@ -6,6 +6,8 @@
 Build/gate (run from /home/thomas/src/crow-backend/packages/vscode-acp):
 
     bun run build && bun run typecheck && bun test test/unit
+    bun run test:e2e   # Playwright suites: sidebar-controls, editor-sessions, delegation-panes, ide-smoke
+                       # (e2e/run-all.ts; requires the repo-built REH server on 8088 below, fails fast without it)
 
 Integration gate (real daemon from source, model qwen4-max — user directive; crow-cli config resolves the key, no env needed):
 

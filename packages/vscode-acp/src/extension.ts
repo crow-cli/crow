@@ -82,9 +82,15 @@ export function activate(context: vscode.ExtensionContext) {
   let requestSeq = 0;
   const nextRequestId = () => `crow-${++requestSeq}-${Date.now()}`;
 
+  /** The called agent's own pane: an editor chat ACTIVE on the session.
+      Every client mirrors the agent's full session list, so list membership
+      proves nothing — matching on it let delegation hijack whichever client
+      registered (or refreshed) first, sidebar included. Delegation never
+      reuses the sidebar and never switches a pane that is not already the
+      called session's own; otherwise it opens a fresh editor pane. */
   function webviewForSession(sessionId: string): vscode.Webview | undefined {
     for (const [webview, entry] of webviews)
-      if (entry.sessions.rows.some((row) => row.id === sessionId)) return webview;
+      if (entry.host === "editor" && entry.sessions.activeId === sessionId) return webview;
     return undefined;
   }
   function openChatPane(attach: { requestId: string; sessionId?: string }): void {
