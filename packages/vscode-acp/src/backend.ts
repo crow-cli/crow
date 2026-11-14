@@ -9,6 +9,8 @@ export type SessionInfo = {
   state: string;
   stopReason?: string;
   cwd?: string;
+  /** The turn's final assistant text, published on idle with a stop reason. */
+  lastAssistantMessage?: string;
   updatedAt: number;
 };
 
@@ -161,6 +163,9 @@ export class Backend {
   readonly conns = new Set<Conn>();
   private readonly owners = new Map<string, Conn>();
   private readonly sessions = new Map<string, SessionInfo>();
+  /** Per-session assistant text for the current turn. A new messageId starts
+   * a new message; `running` clears it; idle(end_turn) publishes it. */
+  private readonly transcripts = new Map<string, { messageId?: string; text: string }>();
   private readonly turnWaiters = new Map<string, TurnWaiter[]>();
   private readonly idle = new Emitter<SessionInfo>();
   /** Fires when a working session goes idle with a stop reason. */
@@ -455,6 +460,7 @@ export class Backend {
           if (this.owners.get(sessionId) === conn) this.owners.delete(sessionId);
           conn.owned.delete(sessionId);
           this.sessions.delete(sessionId);
+          this.transcripts.delete(sessionId);
         }
         return;
       }
@@ -462,17 +468,54 @@ export class Backend {
     }
     if (msg?.method !== "session/update") return;
     const { sessionId, update } = msg.params ?? {};
-    if (typeof sessionId !== "string" || update?.sessionUpdate !== "state_update") return;
-    this.setState(sessionId, update.state, update.stopReason ?? undefined);
+    if (typeof sessionId !== "string") return;
+    if (update?.sessionUpdate === "state_update") {
+      this.setState(sessionId, update.state, update.stopReason ?? undefined);
+    } else if (update?.sessionUpdate === "agent_message_chunk") {
+      this.appendAssistant(sessionId, update.messageId, update.content);
+    } else if (update?.sessionUpdate === "agent_message") {
+      this.wholeAssistant(sessionId, update.messageId, update.content);
+    }
+  }
+
+  /** One streamed piece of assistant text. Chunks of one message concatenate;
+   * a new messageId is a new assistant message within the turn. Non-text
+   * blocks are ignored. */
+  private appendAssistant(sessionId: string, messageId: unknown, content: any): void {
+    if (content?.type !== "text" || typeof content.text !== "string") return;
+    const id = typeof messageId === "string" ? messageId : undefined;
+    const cur = this.transcripts.get(sessionId);
+    if (!cur || cur.messageId !== id) this.transcripts.set(sessionId, { messageId: id, text: content.text });
+    else cur.text += content.text;
+  }
+
+  /** A whole assistant message (the replay upsert): content is a block array.
+   * It replaces the accumulation and is immediately the last assistant
+   * message — replay must not corrupt, nor be corrupted by, live turns. */
+  private wholeAssistant(sessionId: string, messageId: unknown, content: unknown): void {
+    const blocks = Array.isArray(content) ? content : [];
+    const text = blocks
+      .filter((b: any) => b?.type === "text" && typeof b.text === "string")
+      .map((b: any) => b.text)
+      .join("");
+    const id = typeof messageId === "string" ? messageId : undefined;
+    this.transcripts.set(sessionId, { messageId: id, text });
+    const info = this.sessions.get(sessionId);
+    if (info) info.lastAssistantMessage = text;
   }
 
   private setState(sessionId: string, state: string, stopReason?: string, cwd?: string): void {
     const prev = this.sessions.get(sessionId);
+    if (state === "running") this.transcripts.delete(sessionId);
     const info: SessionInfo = {
       sessionId, state, stopReason,
       cwd: cwd ?? prev?.cwd,
+      lastAssistantMessage: prev?.lastAssistantMessage,
       updatedAt: Date.now(),
     };
+    if (state === "idle" && stopReason != null) {
+      info.lastAssistantMessage = this.transcripts.get(sessionId)?.text ?? "";
+    }
     this.sessions.set(sessionId, info);
     if (state !== "idle") return;
     if (stopReason != null) this.settleTurn(sessionId, stopReason);
