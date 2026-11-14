@@ -162,13 +162,13 @@ const { port } = await shim(caller);
 
 // A. delegate to a session NO pane is active on: must open its OWN new pane,
 // load the called transcript there, and leave sidebar + caller untouched
-const a = await mcpPrompt(port, { sessionId: e1, prompt: "Reply with exactly: delegated-one" });
+const a = await mcpPrompt(port, { sessionId: e1, prompt: "Reply with exactly: delegated-one", callerSessionId: e2 });
 if (a.sessionId !== e1) throw new Error(`delegation returned ${a.sessionId}, expected ${e1}`);
 if (await userText(sidebar, "delegated-one").count() !== 0) {
   await page.screenshot({ path: "/tmp/delegation-repro-sidebar-hijack.png" });
   throw new Error("DELEGATION TOOK OVER THE SIDEBAR");
 }
-if (await userText(caller, "delegated-one").count() !== 0) {
+if (await userText(caller, "Reply with exactly: delegated-one").count() !== 0) {
   await page.screenshot({ path: "/tmp/delegation-repro-caller-hijack.png" });
   throw new Error("delegation switched the CALLER pane to the called session");
 }
@@ -177,9 +177,14 @@ await paneA.locator('[data-role="assistant"]').getByText("delegated-one", { exac
 if (await userText(paneA, "editor-one").count() === 0) throw new Error("delegation pane did not load the called session's transcript");
 if (await userText(sidebar, "delegated-one").count() !== 0) throw new Error("DELEGATION TOOK OVER THE SIDEBAR");
 if (await userText(sidebar, "sidebar-one").count() === 0) throw new Error("sidebar lost its own session");
-if (await userText(caller, "delegated-one").count() !== 0) throw new Error("delegation switched the CALLER pane to the called session");
+if (await userText(caller, "Reply with exactly: delegated-one").count() !== 0) throw new Error("delegation switched the CALLER pane to the called session");
 if (await userText(caller, "editor-two").count() === 0) throw new Error("caller lost its own session");
-log("A: inactive-session delegation ran in its own new pane; sidebar and caller untouched");
+// the callee's final message travels back to the caller as a new prompt
+await userText(caller, "[delegation result]").first().waitFor({ timeout: 90000 });
+const delivery = await userText(caller, "[delegation result]").first().textContent();
+if (!delivery?.includes("delegated-one")) throw new Error("delivery to caller missing the callee's answer");
+if (!delivery?.includes(e1)) throw new Error("delivery does not name the called session");
+log("A: inactive-session delegation ran in its own new pane; result delivered back to the caller");
 await page.screenshot({ path: "/tmp/delegation-a-inactive.png" });
 
 // B. delegate to the caller's ACTIVE session: runs in that pane (its own

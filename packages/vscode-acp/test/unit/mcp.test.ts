@@ -61,7 +61,7 @@ describe("MCP streamable HTTP endpoint", () => {
     const sid = await init(mcpUrl);
     const r = await rpc(mcpUrl, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid);
     expect(r.status).toBe(200);
-    expect(r.body.result.tools.map((t: any) => t.name)).toEqual(["crow_status", "crow_prompt", "prompt_worker", "crow_cancel"]);
+    expect(r.body.result.tools.map((t: any) => t.name)).toEqual(["crow_status", "crow_prompt", "crow_cancel"]);
   });
 
   test("requests without a live session are 404; GET is 405", async () => {
@@ -86,27 +86,33 @@ describe("MCP streamable HTTP endpoint", () => {
   test("crow_prompt drives a turn through the owning connection", async () => {
     const { agent, sock, sessionId, mcpUrl } = await setup();
     const sid = await init(mcpUrl);
-    const pending = call(mcpUrl, sid, 4, "crow_prompt", { sessionId, prompt: "go" });
+    const r = await call(mcpUrl, sid, 4, "crow_prompt", { sessionId, prompt: "go" });
+    const result = JSON.parse(r.body.result.content[0].text);
+    expect(result).toMatchObject({ sessionId, status: "running" });
     await waitFor(() => agent.framesOf("session/prompt").length === 1, "prompt forwarded");
     expect(agent.framesOf("session/prompt")[0].frame.params.prompt).toEqual([{ type: "text", text: "go" }]);
     agent.chunk(sock, sessionId, "answer");
     agent.state(sock, sessionId, "idle", "end_turn");
-    const r = await pending;
-    const result = JSON.parse(r.body.result.content[0].text);
-    expect(result.stopReason).toBe("end_turn");
-    expect(result.message).toBe("answer");
+    await waitFor(async () => {
+      const st = JSON.parse((await call(mcpUrl, sid, 9, "crow_status", {})).body.result.content[0].text);
+      return st.sessions.find((s: any) => s.sessionId === sessionId)?.lastAssistantMessage === "answer";
+    }, "final message published");
   });
 
   test("crow_cancel stops a held turn and settles the pending prompt", async () => {
     const { agent, sock, sessionId, mcpUrl } = await setup();
     const sid = await init(mcpUrl);
-    const pending = call(mcpUrl, sid, 5, "crow_prompt", { sessionId, prompt: "hold" });
+    const held = await call(mcpUrl, sid, 5, "crow_prompt", { sessionId, prompt: "hold" });
+    expect(JSON.parse(held.body.result.content[0].text).status).toBe("running");
     await waitFor(() => agent.framesOf("session/prompt").length === 1, "prompt forwarded");
     const cancelled = call(mcpUrl, sid, 6, "crow_cancel", { sessionId });
     await waitFor(() => agent.framesOf("session/cancel").length === 1, "cancel forwarded");
     agent.state(sock, sessionId, "idle", "cancelled");
     expect(JSON.parse((await cancelled).body.result.content[0].text)).toEqual({});
-    expect(JSON.parse((await pending).body.result.content[0].text).stopReason).toBe("cancelled");
+    await waitFor(async () => {
+      const st = JSON.parse((await call(mcpUrl, sid, 9, "crow_status", {})).body.result.content[0].text);
+      return st.sessions.find((s: any) => s.sessionId === sessionId)?.stopReason === "cancelled";
+    }, "cancelled published");
   });
 
   test("the proxy itself serves /mcp alongside /acp", async () => {
@@ -122,7 +128,7 @@ describe("MCP streamable HTTP endpoint", () => {
     expect(status.proxy.mcp).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
     const sid = await init(status.proxy.mcp);
     const r = await rpc(status.proxy.mcp, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid);
-    expect(r.body.result.tools.length).toBe(4);
+    expect(r.body.result.tools.length).toBe(3);
     const client = new TestClient(endpoint);
     cleanups.push(() => client.close());
     const res = await client.request("session/new", { cwd: "/tmp", mcpServers: [] });

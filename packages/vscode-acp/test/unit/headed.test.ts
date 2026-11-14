@@ -78,9 +78,9 @@ describe("headed delegation", () => {
       params: { name: "crow_prompt", arguments: { prompt: "say ok" } },
     });
     const body = JSON.parse((reply.body as any).result.content[0].text);
-    expect(body.stopReason).toBe("end_turn");
+    expect(body.status).toBe("running");
     expect(typeof body.sessionId).toBe("string");
-    expect(body.message).toBe("ok");
+    await waitFor(() => (backend.status() as any).sessions.find((s: any) => s.sessionId === body.sessionId)?.lastAssistantMessage === "ok", "reply published");
   });
 
   test("prompt_worker delivers through the visible client", async () => {

@@ -38,12 +38,15 @@ async function setup() {
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "loop-test", version: "0" } } }),
   });
   const mcpSid = init.headers.get("mcp-session-id")!;
+  // prompt_worker is disabled as an MCP tool while the loop is on hold; the
+  // machinery stays covered here by driving the backend method directly.
   const promptWorker = async (prompt: string) => {
-    const res = await fetch(mcpUrl, {
-      method: "POST", headers: { "content-type": "application/json", "mcp-session-id": mcpSid },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "prompt_worker", arguments: { prompt } } }),
-    });
-    return (await res.json()) as any;
+    try {
+      const ack = await backend.promptWorker({ prompt });
+      return { result: { content: [{ type: "text", text: JSON.stringify(ack) }] } };
+    } catch (err) {
+      return { result: { isError: true, content: [{ type: "text", text: String(err) }] } };
+    }
   };
   const promptsOf = (sid: string) => agent.framesOf("session/prompt").filter((f) => f.frame.params.sessionId === sid);
   const loopStatus = () => (backend.status() as any).loop;

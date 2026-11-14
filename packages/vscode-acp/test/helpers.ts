@@ -1,10 +1,10 @@
 import { Backend, type BackendOptions } from "../src/backend.js";
 import { WebSocket } from "ws";
 
-export async function waitFor(pred: () => boolean, what: string, timeoutMs = 5000): Promise<void> {
+export async function waitFor(pred: () => boolean | Promise<boolean>, what: string, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (pred()) return;
+    if (await pred()) return;
     await new Promise((r) => setTimeout(r, 15));
   }
   throw new Error(`timed out waiting for ${what}`);

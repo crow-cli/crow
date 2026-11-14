@@ -93,6 +93,17 @@ export function activate(context: vscode.ExtensionContext) {
       if (entry.host === "editor" && entry.sessions.activeId === sessionId) return webview;
     return undefined;
   }
+  /** Any client ACTIVE on the session — delegation results go home to the
+      caller's own client, sidebar included; editor panes win ties. */
+  function activeOwnerWebview(sessionId: string): vscode.Webview | undefined {
+    let fallback: vscode.Webview | undefined;
+    for (const [webview, entry] of webviews) {
+      if (entry.sessions.activeId !== sessionId) continue;
+      if (entry.host === "editor") return webview;
+      fallback ??= webview;
+    }
+    return fallback;
+  }
   function openChatPane(attach: { requestId: string; sessionId?: string }): void {
     const pane = vscode.window.createWebviewPanel("crowAcp.chat", "Crow ACP Chat", vscode.ViewColumn.Beside, {
       retainContextWhenHidden: true,
@@ -117,7 +128,7 @@ export function activate(context: vscode.ExtensionContext) {
       return promise;
     },
     async send(sessionId, prompt) {
-      const webview = attachedClients.get(sessionId);
+      const webview = attachedClients.get(sessionId) ?? activeOwnerWebview(sessionId);
       if (!webview) throw new Error(`no visible chat client attached for session ${sessionId}`);
       const text = promptText(prompt);
       const requestId = nextRequestId();

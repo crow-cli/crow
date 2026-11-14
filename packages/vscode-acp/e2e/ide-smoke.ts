@@ -138,17 +138,38 @@ const mcpCall = async (name: string, args: Record<string, unknown>) => {
 };
 const headed = await mcpCall("crow_prompt", { sessionId: turnSession.sessionId, prompt: "Reply with exactly: headed-ok" });
 log("headed crow_prompt:", JSON.stringify(headed));
-if (headed.stopReason !== "end_turn" || headed.sessionId !== turnSession.sessionId) throw new Error("headed turn did not settle on the target session");
-await chat.locator('[data-role="user"]').getByText("Reply with exactly: headed-ok", { exact: false }).first().waitFor({ timeout: 30000 });
-await chat.locator('[data-role="assistant"]').getByText("headed-ok", { exact: false }).first().waitFor({ timeout: 30000 });
-log("headed prompt + reply visible in the open chat");
+if (headed.status !== "running" || headed.sessionId !== turnSession.sessionId) throw new Error("headed crow_prompt did not accept asynchronously");
+const headedDeadline = Date.now() + 180000;
+for (;;) {
+  const st = await mcpCall("crow_status", {});
+  const row = (st.sessions as any[]).find((s) => s.sessionId === turnSession.sessionId);
+  if (row?.state === "idle" && row?.stopReason === "end_turn") break;
+  if (Date.now() > headedDeadline) throw new Error("headed turn never ended");
+  await page.waitForTimeout(1500);
+}
+// delegation to a sidebar session opens the called agent's own editor pane;
+// the prompt + reply must be visible there (any chat frame, not the sidebar)
+let headedFrame: Frame | undefined;
+const headedVisibleDeadline = Date.now() + 30000;
+while (Date.now() < headedVisibleDeadline && !headedFrame) {
+  for (const f of page.frames()) {
+    if (f === page.mainFrame()) continue;
+    try {
+      if (await f.locator('[data-role="user"]').getByText("Reply with exactly: headed-ok", { exact: false }).first().isVisible()) { headedFrame = f; break; }
+    } catch {}
+  }
+  if (!headedFrame) await page.waitForTimeout(1000);
+}
+if (!headedFrame) throw new Error("headed prompt not visible in any chat pane");
+await headedFrame.locator('[data-role="assistant"]').getByText("headed-ok", { exact: false }).first().waitFor({ timeout: 60000 });
+log("headed prompt + reply visible in the called agent's pane");
 await page.screenshot({ path: "/tmp/smoke-headed.png" });
 
 // 5.7 crow_prompt WITHOUT sessionId opens a NEW editor-pane chat and the
 // prompt runs there, visibly.
 const fresh = await mcpCall("crow_prompt", { prompt: "Reply with exactly: pane-ok" });
 log("fresh-pane crow_prompt:", JSON.stringify(fresh));
-if (fresh.stopReason !== "end_turn" || typeof fresh.sessionId !== "string") throw new Error("fresh visible session did not settle");
+if (fresh.status !== "running" || typeof fresh.sessionId !== "string") throw new Error("fresh visible session did not accept");
 let paneFrame: Frame | undefined;
 const paneDeadline = Date.now() + 30000;
 while (Date.now() < paneDeadline && !paneFrame) {
@@ -165,64 +186,8 @@ await paneFrame.locator('[data-role="assistant"]').getByText("pane-ok", { exact:
 log("fresh editor pane shows the prompt and the reply");
 await page.screenshot({ path: "/tmp/smoke-headed-pane.png" });
 
-// 5.5 conductor/worker loop: second session over the proxy WS, arm, drive the
-// conductor from the webview, observe >= 2 cycles in shim status, disarm.
-function wsRequest(ws: WebSocket, method: string, params?: unknown): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const id = Math.floor(Math.random() * 1e9);
-    const onMsg = (d: any) => {
-      const msg = JSON.parse(d.toString());
-      if (msg.id !== id) return;
-      ws.off("message", onMsg);
-      if (msg.error) reject(new Error(msg.error.message));
-      else resolve(msg.result);
-    };
-    ws.on("message", onMsg);
-    ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
-  });
-}
-const workerWs = new WebSocket(`ws://127.0.0.1:${port}/acp`);
-await new Promise<void>((resolve, reject) => { workerWs.once("open", resolve); workerWs.once("error", reject); });
-await wsRequest(workerWs, "initialize", { protocolVersion: 2, info: { name: "smoke-worker", version: "0" } });
-const workerSession = await wsRequest(workerWs, "session/new", { cwd: "/tmp/crow-ide-test", mcpServers: [] });
-log("worker session:", workerSession.sessionId);
-const armed = await wsRequest(workerWs, "_crow/backend/loop/arm", {
-  conductorSessionId: turnSession.sessionId,
-  workerSessionId: workerSession.sessionId,
-});
-log("loop armed:", JSON.stringify(armed));
-if (!armed.armed) throw new Error("loop did not arm");
-
-await chat.locator("textarea").first().fill(
-  "Use the prompt_worker tool with prompt=\"Reply with exactly: ping-1\". " +
-  "The worker's answer will arrive as a new user message (short, like ping-1). " +
-  "Every time such an answer arrives, immediately call prompt_worker again with the next number: ping-2, then ping-3. " +
-  "Never reply with plain text; always call prompt_worker. Do at least two rounds."
-);
-await chat.locator("textarea").first().press("Enter");
-log("conductor prompted, polling loop cycles");
-let cycles = 0;
-const loopDeadline = Date.now() + 420000;
-for (;;) {
-  const st = await findProxy(chat);
-  const loop = st.status.loop as any;
-  cycles = loop?.cycles ?? 0;
-  log("loop:", JSON.stringify(loop));
-  if (cycles >= 2) break;
-  if (Date.now() > loopDeadline) throw new Error(`loop reached only ${cycles} cycles`);
-  await page.waitForTimeout(3000);
-}
-log("loop cycles observed:", cycles);
-const stFinal = await findProxy(chat);
-const workerRow = (stFinal.status.sessions as any[]).find((s) => s.sessionId === workerSession.sessionId);
-log("worker last message:", JSON.stringify(workerRow?.lastAssistantMessage));
-if (!workerRow?.lastAssistantMessage?.toLowerCase().includes("ping")) throw new Error("worker never answered with ping");
-await page.screenshot({ path: "/tmp/smoke-loop.png" });
-const disarmed = await wsRequest(workerWs, "_crow/backend/loop/disarm");
-log("loop disarmed:", JSON.stringify(disarmed));
-const stDisarmed = await findProxy(chat);
-if ((stDisarmed.status.loop as any).armed) throw new Error("loop still armed after disarm");
-workerWs.close();
+// 5.5 conductor/worker loop: on hold while the prompt_worker tool is disabled;
+// async crow_prompt delegation is covered by e2e/delegation-panes.ts.
 
 // 6. reload window: old daemon must die, a new one must spawn
 await page.keyboard.press("Control+Shift+P");

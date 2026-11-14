@@ -53,7 +53,9 @@ afterAll(async () => {
 });
 
 describe("live conductor/worker loop", () => {
-  test("three ping-pong cycles through the real daemon, then disarm", async () => {
+  // On hold with the prompt_worker MCP tool: a real conductor agent cannot
+  // call a disabled tool. The loop machinery stays covered by test/unit/loop.test.ts.
+  test.skip("three ping-pong cycles through the real daemon, then disarm", async () => {
     const conductorClient = await connect();
     const workerClient = await connect();
     const w = await workerClient.request("session/new", { cwd: tmpCwd(), mcpServers: [] });

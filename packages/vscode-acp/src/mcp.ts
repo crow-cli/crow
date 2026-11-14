@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 export type McpBackend = {
   status(): Record<string, unknown>;
   prompt(params: { sessionId?: string; prompt?: unknown; cwd?: string }): Promise<{ stopReason: string; sessionId: string }>;
+  promptAsync(params: { sessionId?: string; prompt?: unknown; cwd?: string; callerSessionId?: string }): Promise<{ sessionId: string }>;
   cancel(params: { sessionId?: string }): Promise<Record<string, never>>;
   promptWorker(params: { prompt?: unknown }): Promise<{ accepted: true }>;
 };
@@ -22,29 +23,22 @@ const TOOLS = [
   {
     name: "crow_prompt",
     description:
-      "Prompt an agent session through its VISIBLE IDE chat and wait for its turn to end. The prompt is delivered through the chat client that owns the session: it appears in the open window and the reply streams there. Omit sessionId to open a new editor-pane chat. Returns the stop reason, the session id, and the session's final assistant message.",
+      "Asynchronously prompt an agent session through its VISIBLE IDE chat: the prompt appears in the called agent's own editor pane and the reply streams there while you keep working. Returns immediately with the session id. Pass your own session id as callerSessionId and the called session's final message is delivered back to you as a new prompt when it finishes (queued until your turn ends). Omit sessionId to open a new editor-pane chat for the called agent.",
     inputSchema: {
       type: "object",
       properties: {
         sessionId: { type: "string", description: "Target session id (see crow_status). Omit to open a new visible chat pane." },
         prompt: { type: "string", description: "The prompt text." },
+        callerSessionId: { type: "string", description: "Your own session id. The result is delivered back to you as a new prompt when the called session finishes." },
         cwd: { type: "string", description: "Working directory; needed only when the backend has never seen the session (headless mode)." },
       },
       required: ["prompt"],
       additionalProperties: false,
     },
   },
-  {
-    name: "prompt_worker",
-    description:
-      "Conductor/worker loop: send a prompt to the worker session and return once it accepts. The worker's answer comes back to you automatically as a new prompt when its turn ends — call this tool every turn to keep the loop going.",
-    inputSchema: {
-      type: "object",
-      properties: { prompt: { type: "string", description: "The instruction for the worker." } },
-      required: ["prompt"],
-      additionalProperties: false,
-    },
-  },
+  // prompt_worker disabled while the stateful loop is on hold; crow_prompt's
+  // async delegation is the basic path. Backend loop machinery remains for
+  // the unit tests and the _crow/backend/loop/* dispatch.
   {
     name: "crow_cancel",
     description: "Cancel the running turn of another agent session. The turn ends with stop reason cancelled.",
@@ -67,14 +61,18 @@ async function callTool(backend: McpBackend, name: string, args: any): Promise<u
       return backend.status();
     case "crow_prompt": {
       const prompt = typeof args.prompt === "string" ? [{ type: "text", text: args.prompt }] : args.prompt;
-      const { stopReason, sessionId } = await backend.prompt({ sessionId: args.sessionId, prompt, cwd: args.cwd });
-      const row = (backend.status().sessions as any[]).find((s) => s.sessionId === sessionId);
-      return { stopReason, sessionId, message: row?.lastAssistantMessage ?? "" };
+      const { sessionId } = await backend.promptAsync({ sessionId: args.sessionId, prompt, cwd: args.cwd, callerSessionId: args.callerSessionId });
+      return {
+        sessionId,
+        status: "running",
+        ...(typeof args.callerSessionId === "string"
+          ? { callerSessionId: args.callerSessionId, result: "delivered back to you as a new prompt when the session finishes" }
+          : {}),
+      };
     }
     case "crow_cancel":
       return backend.cancel({ sessionId: args.sessionId });
-    case "prompt_worker":
-      return backend.promptWorker({ prompt: args.prompt });
+    // case "prompt_worker": disabled with the tool (see TOOLS).
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

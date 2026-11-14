@@ -76,10 +76,15 @@ describe("coordination MCP against the real daemon", () => {
     const worker = await connect();
     const w = await worker.request("session/new", { cwd: tmpCwd(), mcpServers: [] });
     const result = await mcpCall("crow_prompt", { sessionId: w.sessionId, prompt: "Reply with exactly: direct-ok" });
-    expect(result.stopReason).toBe("end_turn");
-    expect(result.message.toLowerCase()).toContain("direct-ok");
-    const status = await mcpCall("crow_status", {});
-    expect(status.sessions.some((s: any) => s.sessionId === w.sessionId && s.state === "idle")).toBe(true);
+    expect(result).toMatchObject({ sessionId: w.sessionId, status: "running" });
+    const deadline = Date.now() + 120000;
+    for (;;) {
+      const status = await mcpCall("crow_status", {});
+      const row = status.sessions.find((s: any) => s.sessionId === w.sessionId);
+      if (row?.state === "idle" && (row.lastAssistantMessage ?? "").toLowerCase().includes("direct-ok")) break;
+      if (Date.now() > deadline) throw new Error("delegated turn never settled");
+      await sleep(1500);
+    }
   }, 180000);
 
   test("a conductor session delegates through the shim MCP and reports the answer", async () => {
@@ -93,15 +98,23 @@ describe("coordination MCP against the real daemon", () => {
     const result = await conductor.request("_crow/backend/prompt", {
       sessionId: c.sessionId,
       prompt: text(
-        `Use the crow_prompt tool with sessionId="${w.sessionId}" and prompt="Reply with exactly: pong". ` +
-        `When the tool returns, reply with exactly the message field it returned.`,
+        `Use the crow_prompt tool with sessionId="${w.sessionId}", prompt="Reply with exactly: pong", ` +
+        `and callerSessionId="${c.sessionId}". The tool returns immediately. ` +
+        `When the delegation result arrives as a new prompt, reply with exactly the answer it contains.`,
       ),
     });
     expect(result).toMatchObject({ stopReason: "end_turn" });
+    const deadline = Date.now() + 240000;
+    for (;;) {
+      const st = await mcpCall("crow_status", {});
+      const row = st.sessions.find((s: any) => s.sessionId === c.sessionId);
+      if ((row?.lastAssistantMessage ?? "").toLowerCase().includes("pong")) break;
+      if (Date.now() > deadline) throw new Error("delegation result never reached the conductor");
+      await sleep(2000);
+    }
     const status = await mcpCall("crow_status", {});
     const byId = Object.fromEntries(status.sessions.map((s: any) => [s.sessionId, s]));
     expect(byId[w.sessionId].state).toBe("idle");
     expect(byId[w.sessionId].lastAssistantMessage.toLowerCase()).toContain("pong");
-    expect(byId[c.sessionId].lastAssistantMessage.toLowerCase()).toContain("pong");
   }, 300000);
 });

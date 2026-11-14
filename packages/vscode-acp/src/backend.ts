@@ -186,6 +186,10 @@ export class Backend {
   private readonly transcripts = new Map<string, { messageId?: string; text: string }>();
   private loop?: { conductor: string; worker: string; cycles: number; workerCalledThisTurn: boolean };
   private readonly turnWaiters = new Map<string, TurnWaiter[]>();
+  /** callee -> caller for async delegations awaiting a result delivery. */
+  private readonly delegations = new Map<string, string>();
+  /** caller -> queued delegation results, delivered one per caller idle. */
+  private readonly outbox = new Map<string, { sessionId: string; stopReason: string; message: string }[]>();
   private readonly idle = new Emitter<SessionInfo>();
   /** Fires when a working session goes idle with a stop reason. */
   readonly onSessionIdle = this.idle.event;
@@ -371,34 +375,63 @@ export class Backend {
    * session on the control connection), ack, then settle on the turn's idle
    * state_update. Park idles carry no stopReason and do not settle it. */
   async prompt(params: { sessionId?: string; prompt?: unknown; cwd?: string }): Promise<{ stopReason: string; sessionId: string }> {
+    const { sessionId, turn } = await this.beginPrompt(params, true);
+    return { ...(await turn!.promise), sessionId };
+  }
+
+  /** Async delegation: deliver the prompt through the visible client and
+   * return immediately. When the called session finishes, its final message
+   * travels back to the caller as a fresh prompt, queued until the caller is
+   * idle — the shim controls when session/prompt lands on both agents. */
+  async promptAsync(params: { sessionId?: string; prompt?: unknown; cwd?: string; callerSessionId?: string }): Promise<{ sessionId: string }> {
+    const { sessionId } = await this.beginPrompt(params, false);
+    const caller = params.callerSessionId;
+    if (typeof caller === "string" && caller !== sessionId) {
+      this.delegations.set(sessionId, caller);
+      this.log(`delegation armed: ${caller} -> ${sessionId}`);
+    }
+    return { sessionId };
+  }
+
+  private async beginPrompt(params: { sessionId?: string; prompt?: unknown; cwd?: string }, trackTurn: boolean): Promise<{ sessionId: string; turn?: { promise: Promise<{ stopReason: string }>; cancel: () => void } }> {
     if (params.prompt == null) throw new MethodError(-32602, "prompt requires prompt");
     const bridge = this.opts.clientBridge;
     if (bridge) {
       const sessionId = await bridge.attach(typeof params.sessionId === "string" ? params.sessionId : undefined);
-      const turn = this.waitForTurnEnd(sessionId);
+      const turn = trackTurn ? this.waitForTurnEnd(sessionId) : undefined;
       // The waiter can reject (dispose, owner drop) while send is still in
       // flight; keep that rejection handled until the await below claims it.
-      turn.promise.catch(() => {});
+      turn?.promise.catch(() => {});
       try {
         await bridge.send(sessionId, params.prompt);
       } catch (err) {
-        turn.cancel();
+        turn?.cancel();
         throw err;
       }
-      return { ...(await turn.promise), sessionId };
+      return { sessionId, turn };
     }
     const sessionId = params?.sessionId;
     if (typeof sessionId !== "string") throw new MethodError(-32602, "prompt requires sessionId");
     const conn = await this.routeSession(sessionId, params.cwd);
-    const turn = this.waitForTurnEnd(sessionId);
-    turn.promise.catch(() => {});
+    const turn = trackTurn ? this.waitForTurnEnd(sessionId) : undefined;
+    turn?.promise.catch(() => {});
     try {
       await conn.request("session/prompt", { sessionId, prompt: params.prompt });
     } catch (err) {
-      turn.cancel();
+      turn?.cancel();
       throw err;
     }
-    return { ...(await turn.promise), sessionId };
+    return { sessionId, turn };
+  }
+
+  /** Send without settling a turn: delegation results ride this. */
+  private async deliverPrompt(sessionId: string, prompt: unknown): Promise<void> {
+    const bridge = this.opts.clientBridge;
+    if (bridge) await bridge.send(sessionId, prompt);
+    else {
+      const conn = await this.routeSession(sessionId);
+      await conn.request("session/prompt", { sessionId, prompt });
+    }
   }
 
   /** Wrap session/cancel. The confirmation is the idle(cancelled)
@@ -485,17 +518,43 @@ export class Backend {
       loop.cycles += 1;
       const message = this.transcripts.get(loop.worker)?.text ?? "";
       this.log(`loop cycle ${loop.cycles}: worker -> conductor`);
-      void this.prompt({ sessionId: loop.conductor, prompt: [{ type: "text", text: message }] })
+      void this.promptAsync({ sessionId: loop.conductor, prompt: [{ type: "text", text: message }] })
         .catch((err) => this.log(`loop handoff failed: ${err.message}`));
     } else if (info.sessionId === loop.conductor) {
       const called = loop.workerCalledThisTurn;
       loop.workerCalledThisTurn = false;
       if (!called) {
         this.log("loop: conductor ended a turn without prompt_worker — reprimand");
-        void this.prompt({ sessionId: loop.conductor, prompt: [{ type: "text", text: REPRIMAND }] })
+        void this.promptAsync({ sessionId: loop.conductor, prompt: [{ type: "text", text: REPRIMAND }] })
           .catch((err) => this.log(`loop reprimand failed: ${err.message}`));
       }
     }
+  }
+
+  private onDelegationIdle(info: SessionInfo): void {
+    const caller = this.delegations.get(info.sessionId);
+    if (caller) {
+      this.delegations.delete(info.sessionId);
+      const queue = this.outbox.get(caller) ?? [];
+      queue.push({ sessionId: info.sessionId, stopReason: info.stopReason ?? "", message: info.lastAssistantMessage ?? "" });
+      this.outbox.set(caller, queue);
+      this.log(`delegation result queued: ${info.sessionId} -> ${caller}`);
+      this.flushOutbox(caller);
+    }
+    this.flushOutbox(info.sessionId);
+  }
+
+  /** One result per caller idle: the delivery itself starts a turn, and the
+   * next idle settles the next item. Never lands mid-turn. */
+  private flushOutbox(sessionId: string): void {
+    const queue = this.outbox.get(sessionId);
+    if (!queue?.length) return;
+    if (this.sessions.get(sessionId)?.state !== "idle") return;
+    const item = queue.shift()!;
+    if (!queue.length) this.outbox.delete(sessionId);
+    const text = `[delegation result] session ${item.sessionId} finished (${item.stopReason}):\n${item.message}`;
+    this.log(`delegation result delivered to ${sessionId}`);
+    void this.deliverPrompt(sessionId, [{ type: "text", text }]).catch((err) => this.log(`delegation delivery failed: ${err.message}`));
   }
 
   private async control(): Promise<Conn> {
@@ -647,6 +706,7 @@ export class Backend {
       this.log(`session ${sessionId} idle${stopReason ? ` (${stopReason})` : ""}`);
       this.idle.fire(info);
       this.onLoopIdle(info);
+      this.onDelegationIdle(info);
     }
   }
 
@@ -658,6 +718,8 @@ export class Backend {
     if (this.disposed) return;
     this.disposed = true;
     this.loop = undefined;
+    this.delegations.clear();
+    this.outbox.clear();
     for (const conn of this.conns) {
       conn.down?.close(1001, "window closed");
       conn.up.close();
