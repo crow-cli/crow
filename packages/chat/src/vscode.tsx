@@ -77,6 +77,16 @@ function VscodeBridge() {
   // message takes, so the turn is visible in this chat.
   const attachAndReport = async (requestId: string, sessionId?: string) => {
     try {
+      // Wait out the runtime's own restore-on-connect: switching before it
+      // finishes lets it land on another thread afterwards, stranding the
+      // attached session with a stale transcript.
+      const deadline = Date.now() + 20000;
+      for (;;) {
+        const extras = acpExtras.get(aui);
+        if (extras.connectionState === "connected" && !aui.thread.getState().isLoading) break;
+        if (Date.now() > deadline) throw new Error("chat runtime never finished loading");
+        await new Promise((r) => setTimeout(r, 100));
+      }
       if (sessionId) await aui.threads.switchToThread(sessionId);
       else await aui.threads.switchToNewThread();
       const sid = acpExtras.get(aui).sessionId;

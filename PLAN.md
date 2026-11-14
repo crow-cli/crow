@@ -66,3 +66,5 @@ MODEL-SERVER LANE: obsolete — qwen4-max is remote and parallel-safe (see LANES
 
 - [x] Final gate: build + typecheck + full unit + full integration green; TODO/PLAN all checked; goal_done.
   DONE 2026-11-13 (stream A): build+typecheck green (20:56), unit 42/42, integration 8/8 in 89s on qwen4-max, e2e SMOKE PASS exit 0 vs deployed 1a3c1bf. Commits: 49b833b base, b61b365 phase 1, 7331b32+5cee4b3 phase 2, 1a3c1bf phase 3 — all with Session-Id trailer.
+- [x] Headed crow_prompt (user correction: delegation must run THROUGH THE VISIBLE CLIENT): ClientBridge seam in backend.ts, extension bridge (attach binds owning webview or opens editor pane; send via composer typed-message path), headless kept only as test/fallback seam. DONE 2026-11-13: 3816382, unit 47/47, integration 8/8, SMOKE PASS.
+- [x] Editor-pane session controls + attach race fix: editor/title menus (new/switch/collapse/settings) scoped to the chat tab, activeChat focus tracking, attach waits connected && !isLoading before switching. DONE 2026-11-13: e2e/editor-sessions.ts hermetic PASS, screenshots vision-verified, ide-smoke re-run SMOKE PASS (2 loop cycles, reload lifecycle, no orphans).
