@@ -75,18 +75,30 @@ function VscodeBridge() {
   // Headed delegation: the extension binds this pane to a session, then
   // delivers the prompt through the composer — the exact path a typed
   // message takes, so the turn is visible in this chat.
+  // The runtime restores the latest session on connect; switching threads
+  // before that finishes lets restore land afterwards and hijack the pane.
+  const waitRuntimeReady = async () => {
+    const deadline = Date.now() + 20000;
+    for (;;) {
+      const extras = acpExtras.get(aui);
+      if (extras.connectionState === "connected" && !aui.thread.getState().isLoading) return;
+      if (Date.now() > deadline) throw new Error("chat runtime never finished loading");
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
+  const whenReady = (fn: () => void | Promise<void>) => {
+    void (async () => {
+      try {
+        await waitRuntimeReady();
+        await fn();
+      } catch (err) {
+        console.error("[crow-acp] thread switch failed:", err);
+      }
+    })();
+  };
   const attachAndReport = async (requestId: string, sessionId?: string) => {
     try {
-      // Wait out the runtime's own restore-on-connect: switching before it
-      // finishes lets it land on another thread afterwards, stranding the
-      // attached session with a stale transcript.
-      const deadline = Date.now() + 20000;
-      for (;;) {
-        const extras = acpExtras.get(aui);
-        if (extras.connectionState === "connected" && !aui.thread.getState().isLoading) break;
-        if (Date.now() > deadline) throw new Error("chat runtime never finished loading");
-        await new Promise((r) => setTimeout(r, 100));
-      }
+      await waitRuntimeReady();
       if (sessionId) await aui.threads.switchToThread(sessionId);
       else await aui.threads.switchToNewThread();
       const sid = acpExtras.get(aui).sessionId;
@@ -108,10 +120,10 @@ function VscodeBridge() {
     const onMessage = (event: MessageEvent<{ type?: string; id?: string; requestId?: string; sessionId?: string; text?: string }>) => {
       switch (event.data?.type) {
         case "switch-thread":
-          if (event.data.id) aui.threads.switchToThread(event.data.id);
+          if (event.data.id) whenReady(() => aui.threads.switchToThread(event.data.id!));
           break;
         case "new-thread":
-          aui.threads.switchToNewThread();
+          whenReady(() => aui.threads.switchToNewThread());
           break;
         case "delete-thread":
           if (event.data.id) aui.threads.item({ id: event.data.id }).delete();

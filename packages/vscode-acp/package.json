@@ -50,27 +50,53 @@
         "command": "crowAcp.settings",
         "title": "Crow ACP Settings",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "crowAcp.editor.session.new",
+        "title": "New Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "crowAcp.editor.session.switch",
+        "title": "Switch Session",
+        "icon": "$(history)"
+      },
+      {
+        "command": "crowAcp.editor.collapseAll",
+        "title": "Toggle All Tool Calls and Thoughts",
+        "icon": "$(collapse-all)"
+      },
+      {
+        "command": "crowAcp.editor.settings",
+        "title": "Crow ACP Settings",
+        "icon": "$(settings-gear)"
       }
     ],
     "menus": {
+      "commandPalette": [
+        { "command": "crowAcp.editor.session.new", "when": "false" },
+        { "command": "crowAcp.editor.session.switch", "when": "false" },
+        { "command": "crowAcp.editor.collapseAll", "when": "false" },
+        { "command": "crowAcp.editor.settings", "when": "false" }
+      ],
       "editor/title": [
         {
-          "command": "crowAcp.session.new",
+          "command": "crowAcp.editor.session.new",
           "when": "activeWebviewPanelId == 'crowAcp.chat'",
           "group": "navigation@1"
         },
         {
-          "command": "crowAcp.session.switch",
+          "command": "crowAcp.editor.session.switch",
           "when": "activeWebviewPanelId == 'crowAcp.chat'",
           "group": "navigation@2"
         },
         {
-          "command": "crowAcp.collapseAll",
+          "command": "crowAcp.editor.collapseAll",
           "when": "activeWebviewPanelId == 'crowAcp.chat'",
           "group": "navigation@3"
         },
         {
-          "command": "crowAcp.settings",
+          "command": "crowAcp.editor.settings",
           "when": "activeWebviewPanelId == 'crowAcp.chat'",
           "group": "navigation@4"
         }

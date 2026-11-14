@@ -59,12 +59,11 @@ export function activate(context: vscode.ExtensionContext) {
   const startupConfig = vscode.workspace.getConfiguration("crowAcp");
   let backendError: string | undefined;
   let panel: vscode.WebviewPanel | undefined;
-  type ChatEntry = { host: "editor" | "sidebar"; cleanup: vscode.Disposable; sessions: SessionState };
+  type ChatEntry = { host: "editor" | "sidebar"; cleanup: vscode.Disposable; sessions: SessionState; panel?: vscode.WebviewPanel };
   const webviews = new Map<vscode.Webview, ChatEntry>();
-  /** The chat the session commands act on: whichever pane was focused last
-   * (editor tab or sidebar), so an editor-pane chat gets its own new/switch
-   * session controls instead of always driving the sidebar. */
-  let activeChat: vscode.Webview | undefined;
+  /** The active editor chat tab: the editor/title controls sit above it, so
+   * they act on it. Sidebar controls never consult this. */
+  let activeEditorChat: vscode.Webview | undefined;
   /** Fires with the webview whose thread list just changed, so an open
    * dropdown re-renders against the agent's answer instead of going stale. */
   const sessionsChanged = new vscode.EventEmitter<vscode.Webview>();
@@ -181,15 +180,10 @@ export function activate(context: vscode.ExtensionContext) {
     const focusTrackers: vscode.Disposable[] = [];
     if (host === "editor") {
       const pane = owner as vscode.WebviewPanel;
-      activeChat = webview;
+      activeEditorChat = webview;
       focusTrackers.push(pane.onDidChangeViewState((e) => {
-        if (e.webviewPanel.active) activeChat = webview;
-        else if (activeChat === webview) activeChat = undefined;
-      }));
-    } else {
-      const view = owner as vscode.WebviewView;
-      focusTrackers.push(view.onDidChangeVisibility(() => {
-        if (view.visible) activeChat = webview;
+        if (e.webviewPanel.active) activeEditorChat = webview;
+        else if (activeEditorChat === webview) activeEditorChat = undefined;
       }));
     }
     const listener = webview.onDidReceiveMessage((message: unknown) => {
@@ -246,28 +240,49 @@ export function activate(context: vscode.ExtensionContext) {
       for (const t of focusTrackers) t.dispose();
       webviews.delete(webview);
       panelAttach.delete(webview);
-      if (activeChat === webview) activeChat = undefined;
+      if (activeEditorChat === webview) activeEditorChat = undefined;
       for (const [sid, wv] of attachedClients) if (wv === webview) attachedClients.delete(sid);
     });
-    const entry: ChatEntry = { host, cleanup, sessions: { rows: [], canDelete: false } };
+    const entry: ChatEntry = { host, cleanup, sessions: { rows: [], canDelete: false }, panel: host === "editor" ? (owner as vscode.WebviewPanel) : undefined };
     webviews.set(webview, entry);
     render(webview, host);
   }
   function renderAll() {
     for (const [webview, { host }] of webviews) render(webview, host);
   }
-  /** The sidebar webview when it is open, else whichever chat tab is — the
-      dropdown mirrors that webview's thread list and commands answer to it. */
-  function chatWebview(): vscode.Webview | undefined {
-    if (activeChat && webviews.has(activeChat)) return activeChat;
+  /** Controls act on the client they sit above: sidebar menus resolve the
+      sidebar webview, editor/title menus resolve the active editor chat tab. */
+  function sidebarWebview(): vscode.Webview | undefined {
     for (const [webview, { host }] of webviews) if (host === "sidebar") return webview;
-    return webviews.keys().next().value;
+    return undefined;
   }
-  function postToChat(message: Record<string, unknown>) {
-    chatWebview()?.postMessage(message);
+  function editorWebview(): vscode.Webview | undefined {
+    if (activeEditorChat && webviews.has(activeEditorChat)) return activeEditorChat;
+    for (const [webview, { host }] of webviews) if (host === "editor") return webview;
+    return undefined;
   }
   function focusChat() {
     void vscode.commands.executeCommand("crowAcp.sidebar.focus");
+  }
+  /** One command set per host: the menus above a client invoke that client's
+      set, so a control always acts on the client it sits above. */
+  function chatCommands(prefix: string, resolve: () => vscode.Webview | undefined, focus: () => void) {
+    return [
+      vscode.commands.registerCommand(prefix + "session.new", () => {
+        resolve()?.postMessage({ type: "new-thread" });
+        focus();
+      }),
+      vscode.commands.registerCommand(prefix + "session.switch", () => {
+        const webview = resolve();
+        if (webview) pickSession(webview);
+        else focus();
+      }),
+      vscode.commands.registerCommand(prefix + "collapseAll", () => {
+        resolve()?.postMessage({ type: "collapse-all" });
+      }),
+      vscode.commands.registerCommand(prefix + "settings", () =>
+        vscode.commands.executeCommand("workbench.action.openSettings", "@ext:crow-ai.crow-acp")),
+    ];
   }
   /** The session dropdown behind the view title's history icon: new, switch
       and delete in one quick pick, live-updating while it is open. */
@@ -323,22 +338,14 @@ export function activate(context: vscode.ExtensionContext) {
     }, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand("crowAcp.openSidebar", () =>
       vscode.commands.executeCommand("crowAcp.sidebar.focus")),
-    vscode.commands.registerCommand("crowAcp.session.new", () => {
-      postToChat({ type: "new-thread" });
-      focusChat();
+    ...chatCommands("crowAcp.", sidebarWebview, focusChat),
+    ...chatCommands("crowAcp.editor.", editorWebview, () => {
+      const webview = editorWebview();
+      if (webview) webviews.get(webview)?.panel?.reveal();
+      else void vscode.commands.executeCommand("crowAcp.open");
     }),
-    vscode.commands.registerCommand("crowAcp.session.switch", () => {
-      const webview = chatWebview();
-      if (webview) pickSession(webview);
-      else focusChat();
-    }),
-    vscode.commands.registerCommand("crowAcp.collapseAll", () => {
-      for (const webview of webviews.keys()) webview.postMessage({ type: "collapse-all" });
-    }),
-    vscode.commands.registerCommand("crowAcp.settings", () =>
-      vscode.commands.executeCommand("workbench.action.openSettings", "@ext:crow-ai.crow-acp")),
     vscode.commands.registerCommand("crowAcp.open", () => {
-      if (panel) { panel.reveal(); activeChat = panel.webview; return; }
+      if (panel) { panel.reveal(); activeEditorChat = panel.webview; return; }
       panel = vscode.window.createWebviewPanel("crowAcp.chat", "Crow ACP Chat", vscode.ViewColumn.Beside, {
         retainContextWhenHidden: true,
       });
