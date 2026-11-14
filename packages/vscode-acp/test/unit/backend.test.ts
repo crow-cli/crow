@@ -117,7 +117,7 @@ describe("session observation", () => {
     const s1 = await newSession(a, "/tmp/one");
     const s2 = await newSession(b, "/tmp/two");
     const result = await b.request("_crow/backend/prompt", { sessionId: s1, prompt: [{ type: "text", text: "go" }] });
-    expect(result).toEqual({ stopReason: "end_turn" });
+    expect(result).toMatchObject({ stopReason: "end_turn" });
     const sessions = (await a.request("_crow/backend/status")).sessions as any[];
     expect(sessions.length).toBe(2);
     const byId = Object.fromEntries(sessions.map((s) => [s.sessionId, s]));
@@ -178,7 +178,7 @@ describe("prompt wrapper", () => {
     const sock = promptFrame.conn;
     agent.chunk(sock, sessionId, "hello");
     agent.state(sock, sessionId, "idle", "end_turn");
-    expect(await pending).toEqual({ stopReason: "end_turn" });
+    expect(await pending).toMatchObject({ stopReason: "end_turn" });
     // the owning webview saw the whole turn
     const updates = owner.frames.filter((f) => f.method === "session/update" && f.params.sessionId === sessionId);
     expect(updates.map((u) => u.params.update.sessionUpdate)).toEqual(["state_update", "agent_message_chunk", "state_update"]);
@@ -201,7 +201,7 @@ describe("prompt wrapper", () => {
     await sleep(120);
     expect(settled).toBe(false);
     agent.state(sock, sessionId, "idle", "end_turn");
-    expect(await pending).toEqual({ stopReason: "end_turn" });
+    expect(await pending).toMatchObject({ stopReason: "end_turn" });
   });
 
   test("orphaned session is resumed on the control connection with its cwd", async () => {
@@ -213,7 +213,7 @@ describe("prompt wrapper", () => {
 
     const caller = await connect(endpoint);
     const result = await caller.request("_crow/backend/prompt", { sessionId, prompt: [{ type: "text", text: "hi" }] });
-    expect(result).toEqual({ stopReason: "end_turn" });
+    expect(result).toMatchObject({ stopReason: "end_turn" });
 
     const resumes = agent.framesOf("session/resume");
     expect(resumes.length).toBe(1);
@@ -248,7 +248,7 @@ describe("cancel wrapper", () => {
     const cancelFrame = agent.framesOf("session/cancel")[0];
     expect(cancelFrame.frame.id).toBeUndefined(); // notification, not request
     expect(cancelFrame.conn).toBe(agent.framesOf("session/new")[0].conn);
-    expect(await pending).toEqual({ stopReason: "cancelled" });
+    expect(await pending).toMatchObject({ stopReason: "cancelled" });
   });
 
   test("cancel without a live connection is -32602", async () => {

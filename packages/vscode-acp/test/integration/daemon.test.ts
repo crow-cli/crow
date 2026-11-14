@@ -96,7 +96,7 @@ describe("real daemon from source", () => {
       sessionId,
       prompt: text("Reply with exactly: ok"),
     });
-    expect(result).toEqual({ stopReason: "end_turn" });
+    expect(result).toMatchObject({ stopReason: "end_turn" });
 
     const updates = owner.frames.filter((f) => f.method === "session/update" && f.params.sessionId === sessionId);
     const states = updates.filter((u) => u.params.update.sessionUpdate === "state_update").map((u) => u.params.update.state);
@@ -136,12 +136,12 @@ describe("real daemon from source", () => {
 
     const ack = await caller.request("_crow/backend/cancel", { sessionId });
     expect(ack).toEqual({});
-    expect(await pending).toEqual({ stopReason: "cancelled" });
+    expect(await pending).toMatchObject({ stopReason: "cancelled" });
     console.log("sleep pids after cancel:", sleepPids().join(",") || "(none)");
 
     // the session survived the cancel and takes another turn
     const result = await caller.request("_crow/backend/prompt", { sessionId, prompt: text("Reply with exactly: alive") });
-    expect(result).toEqual({ stopReason: "end_turn" });
+    expect(result).toMatchObject({ stopReason: "end_turn" });
   }, 180000);
 
   test("orphaned session resumes on the control connection with its transcript", async () => {
@@ -149,13 +149,13 @@ describe("real daemon from source", () => {
     const caller = await connect();
     const { sessionId, cwd } = await newSession(owner);
     const first = await caller.request("_crow/backend/prompt", { sessionId, prompt: text("Reply with exactly: first") });
-    expect(first).toEqual({ stopReason: "end_turn" });
+    expect(first).toMatchObject({ stopReason: "end_turn" });
 
     owner.close();
     await sleep(300);
 
     const second = await caller.request("_crow/backend/prompt", { sessionId, prompt: text("Reply with exactly: second") });
-    expect(second).toEqual({ stopReason: "end_turn" });
+    expect(second).toMatchObject({ stopReason: "end_turn" });
     expect((backend!.status().control as any).connected).toBe(true);
 
     // a fresh webview resumes the session and gets the whole transcript back

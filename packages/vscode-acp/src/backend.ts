@@ -25,6 +25,21 @@ export type BackendOptions = {
   external?: string;
   /** Extra argv appended after `acp2 --http --host --port` (e.g. --model). */
   extraArgs?: string[];
+  /** Visible-chat seam. When present, prompts are delivered through the
+   * webview that owns the session (or a freshly opened editor pane) instead
+   * of the headless control connection — every delegated turn is on screen. */
+  clientBridge?: ClientBridge;
+};
+
+export type ClientBridge = {
+  /** Bind a visible chat client to the session, opening an editor pane when
+   * no open window owns it. Omit sessionId to mint a fresh visible session.
+   * Resolves with the sessionId once the client is attached, BEFORE any
+   * prompt is sent, so the shim can register its turn waiter first. */
+  attach(sessionId?: string): Promise<string>;
+  /** Deliver the prompt through the attached client's own ACP connection —
+   * the same path a typed message takes. */
+  send(sessionId: string, prompt: unknown): Promise<void>;
 };
 
 class Emitter<T> {
@@ -203,7 +218,7 @@ export class Backend {
             running: this.externalPid != null ? !this.externalDead : undefined,
           }
         : { pid: this.child?.pid, port: this.daemonPort, running: this.child != null && this.child.exitCode === null },
-      proxy: { port: this.proxyPort, endpoint: this.endpoint, mcp: this.mcpEndpoint },
+      proxy: { port: this.proxyPort, endpoint: this.endpoint, mcp: this.mcpEndpoint, headed: this.opts.clientBridge != null },
       control: { connected: this.controlConn != null && !this.controlConn.closed },
       sessions: [...this.sessions.values()],
       loop: this.loopStatus(),
@@ -355,19 +370,35 @@ export class Backend {
   /** Wrap session/prompt: route through the owning connection (or resume the
    * session on the control connection), ack, then settle on the turn's idle
    * state_update. Park idles carry no stopReason and do not settle it. */
-  async prompt(params: { sessionId?: string; prompt?: unknown; cwd?: string }): Promise<{ stopReason: string }> {
+  async prompt(params: { sessionId?: string; prompt?: unknown; cwd?: string }): Promise<{ stopReason: string; sessionId: string }> {
+    if (params.prompt == null) throw new MethodError(-32602, "prompt requires prompt");
+    const bridge = this.opts.clientBridge;
+    if (bridge) {
+      const sessionId = await bridge.attach(typeof params.sessionId === "string" ? params.sessionId : undefined);
+      const turn = this.waitForTurnEnd(sessionId);
+      // The waiter can reject (dispose, owner drop) while send is still in
+      // flight; keep that rejection handled until the await below claims it.
+      turn.promise.catch(() => {});
+      try {
+        await bridge.send(sessionId, params.prompt);
+      } catch (err) {
+        turn.cancel();
+        throw err;
+      }
+      return { ...(await turn.promise), sessionId };
+    }
     const sessionId = params?.sessionId;
     if (typeof sessionId !== "string") throw new MethodError(-32602, "prompt requires sessionId");
-    if (params.prompt == null) throw new MethodError(-32602, "prompt requires prompt");
     const conn = await this.routeSession(sessionId, params.cwd);
     const turn = this.waitForTurnEnd(sessionId);
+    turn.promise.catch(() => {});
     try {
       await conn.request("session/prompt", { sessionId, prompt: params.prompt });
     } catch (err) {
       turn.cancel();
       throw err;
     }
-    return turn.promise;
+    return { ...(await turn.promise), sessionId };
   }
 
   /** Wrap session/cancel. The confirmation is the idle(cancelled)
@@ -435,8 +466,14 @@ export class Backend {
     if (!loop) throw new MethodError(-32602, "no loop armed");
     if (params?.prompt == null) throw new MethodError(-32602, "prompt_worker requires prompt");
     const prompt = typeof params.prompt === "string" ? [{ type: "text", text: params.prompt }] : params.prompt;
-    const conn = await this.routeSession(loop.worker);
-    await conn.request("session/prompt", { sessionId: loop.worker, prompt });
+    const bridge = this.opts.clientBridge;
+    if (bridge) {
+      const sid = await bridge.attach(loop.worker);
+      await bridge.send(sid, prompt);
+    } else {
+      const conn = await this.routeSession(loop.worker);
+      await conn.request("session/prompt", { sessionId: loop.worker, prompt });
+    }
     if (this.loop === loop) loop.workerCalledThisTurn = true;
     return { accepted: true };
   }

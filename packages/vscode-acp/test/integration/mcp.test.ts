@@ -97,7 +97,7 @@ describe("coordination MCP against the real daemon", () => {
         `When the tool returns, reply with exactly the message field it returned.`,
       ),
     });
-    expect(result).toEqual({ stopReason: "end_turn" });
+    expect(result).toMatchObject({ stopReason: "end_turn" });
     const status = await mcpCall("crow_status", {});
     const byId = Object.fromEntries(status.sessions.map((s: any) => [s.sessionId, s]));
     expect(byId[w.sessionId].state).toBe("idle");

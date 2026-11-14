@@ -91,7 +91,7 @@ describe("live conductor/worker loop", () => {
     const after = await conductorClient.request("_crow/backend/prompt", {
       sessionId: w.sessionId, prompt: text("Reply with exactly: still-alive"),
     });
-    expect(after).toEqual({ stopReason: "end_turn" });
+    expect(after).toMatchObject({ stopReason: "end_turn" });
     const status = backend!.status() as any;
     const workerRow = status.sessions.find((s: any) => s.sessionId === w.sessionId);
     expect(workerRow.lastAssistantMessage.toLowerCase()).toContain("still-alive");

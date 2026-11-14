@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { Backend } from "./backend.js";
+import { Backend, type ClientBridge } from "./backend.js";
 
 type SessionRow = { id: string; title?: string; updatedAt?: string; isRunning: boolean };
 type SessionState = { rows: SessionRow[]; activeId?: string; canDelete: boolean };
@@ -44,16 +44,19 @@ function sessionItems(state: SessionState): SessionItem[] {
   return items;
 }
 
+function promptText(prompt: unknown): string {
+  const blocks = typeof prompt === "string" ? [{ type: "text", text: prompt }] : Array.isArray(prompt) ? prompt : [];
+  const text = blocks
+    .filter((b: any) => b?.type === "text" && typeof b.text === "string")
+    .map((b: any) => b.text)
+    .join("\n");
+  if (!text) throw new Error("headed prompt needs text content");
+  return text;
+}
+
 export function activate(context: vscode.ExtensionContext) {
   const output = vscode.window.createOutputChannel("Crow ACP");
   const startupConfig = vscode.workspace.getConfiguration("crowAcp");
-  const backend = new Backend({
-    log: (line) => output.appendLine(line),
-    cliCommand: startupConfig.get<string[]>("cliCommand") ?? ["crow-cli"],
-    firstPort: startupConfig.get<number>("port") ?? 2771,
-    external: startupConfig.get<string>("backend") === "external" ? startupConfig.get<string>("endpoint") : undefined,
-    extraArgs: startupConfig.get<string>("model") ? ["--model", startupConfig.get<string>("model")!] : undefined,
-  });
   let backendError: string | undefined;
   let panel: vscode.WebviewPanel | undefined;
   type ChatEntry = { host: "editor" | "sidebar"; cleanup: vscode.Disposable; sessions: SessionState };
@@ -62,6 +65,73 @@ export function activate(context: vscode.ExtensionContext) {
    * dropdown re-renders against the agent's answer instead of going stale. */
   const sessionsChanged = new vscode.EventEmitter<vscode.Webview>();
   const root = vscode.Uri.joinPath(context.extensionUri, "dist", "webview");
+
+  // -- headed delegation bridge -------------------------------------------
+  // crow_prompt must land in a VISIBLE chat: the prompt goes through the
+  // webview's own ACP connection (composer.setText + send), never a headless
+  // control request. attach binds a pane to the session first and reports
+  // its sessionId; only then does send deliver the prompt.
+  type AttachWaiter = { resolve: (sessionId: string) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> };
+  const attachWaiters = new Map<string, AttachWaiter>();
+  const sendWaiters = new Map<string, { resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  const attachedClients = new Map<string, vscode.Webview>();
+  const panelAttach = new Map<vscode.Webview, { requestId: string; sessionId?: string }>();
+  let requestSeq = 0;
+  const nextRequestId = () => `crow-${++requestSeq}-${Date.now()}`;
+
+  function webviewForSession(sessionId: string): vscode.Webview | undefined {
+    for (const [webview, entry] of webviews)
+      if (entry.sessions.rows.some((row) => row.id === sessionId)) return webview;
+    return undefined;
+  }
+  function openChatPane(attach: { requestId: string; sessionId?: string }): void {
+    const pane = vscode.window.createWebviewPanel("crowAcp.chat", "Crow ACP Chat", vscode.ViewColumn.Beside, {
+      retainContextWhenHidden: true,
+    });
+    panel = pane;
+    panelAttach.set(pane.webview, attach);
+    configure(pane, "editor");
+  }
+  const clientBridge: ClientBridge = {
+    attach(sessionId) {
+      const requestId = nextRequestId();
+      const promise = new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          attachWaiters.delete(requestId);
+          reject(new Error("chat client did not attach within 30s"));
+        }, 30000);
+        attachWaiters.set(requestId, { resolve, reject, timer });
+      });
+      const owner = sessionId ? webviewForSession(sessionId) : undefined;
+      if (owner) void owner.postMessage({ type: "prompt-attach", requestId, sessionId });
+      else openChatPane({ requestId, sessionId });
+      return promise;
+    },
+    async send(sessionId, prompt) {
+      const webview = attachedClients.get(sessionId);
+      if (!webview) throw new Error(`no visible chat client attached for session ${sessionId}`);
+      const text = promptText(prompt);
+      const requestId = nextRequestId();
+      const ack = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          sendWaiters.delete(requestId);
+          reject(new Error("chat client did not accept the prompt within 15s"));
+        }, 15000);
+        sendWaiters.set(requestId, { resolve, reject, timer });
+      });
+      void webview.postMessage({ type: "prompt-send", requestId, sessionId, text });
+      await ack;
+    },
+  };
+
+  const backend = new Backend({
+    log: (line) => output.appendLine(line),
+    cliCommand: startupConfig.get<string[]>("cliCommand") ?? ["crow-cli"],
+    firstPort: startupConfig.get<number>("port") ?? 2771,
+    external: startupConfig.get<string>("backend") === "external" ? startupConfig.get<string>("endpoint") : undefined,
+    extraArgs: startupConfig.get<string>("model") ? ["--model", startupConfig.get<string>("model")!] : undefined,
+    clientBridge,
+  });
   function render(webview: vscode.Webview, host: "editor" | "sidebar") {
     const config = vscode.workspace.getConfiguration("crowAcp");
     const folder = vscode.window.activeTextEditor
@@ -88,6 +158,7 @@ export function activate(context: vscode.ExtensionContext) {
       protocol: config.get<string>("protocol"),
       mcpConfig: config.get<string>("mcpConfig"),
       mcpEndpoint: backend.mcpEndpoint,
+      attach: panelAttach.get(webview),
     }).replace(/</g, "\\u003c");
     const nonce = Array.from({ length: 24 }, () => Math.floor(Math.random() * 36).toString(36)).join("");
     webview.html = `<!DOCTYPE html>
@@ -105,9 +176,39 @@ export function activate(context: vscode.ExtensionContext) {
     webview.options = { enableScripts: true, localResourceRoots: [root] };
     const listener = webview.onDidReceiveMessage((message: unknown) => {
       if (typeof message !== "object" || message === null || !("type" in message)) return;
-      const payload = message as { type: unknown; threads?: unknown; activeId?: unknown; canDelete?: unknown };
+      const payload = message as { type: unknown; threads?: unknown; activeId?: unknown; canDelete?: unknown; requestId?: unknown; sessionId?: unknown; error?: unknown };
       if (payload.type === "settings") {
         void vscode.commands.executeCommand("workbench.action.openSettings", "@ext:crow-ai.crow-acp");
+      } else if (payload.type === "prompt-attached" && typeof payload.requestId === "string" && typeof payload.sessionId === "string") {
+        const waiter = attachWaiters.get(payload.requestId);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          attachWaiters.delete(payload.requestId);
+          attachedClients.set(payload.sessionId, webview);
+          panelAttach.delete(webview);
+          waiter.resolve(payload.sessionId);
+        }
+      } else if (payload.type === "prompt-attach-failed" && typeof payload.requestId === "string") {
+        const waiter = attachWaiters.get(payload.requestId);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          attachWaiters.delete(payload.requestId);
+          waiter.reject(new Error(typeof payload.error === "string" ? payload.error : "chat attach failed"));
+        }
+      } else if (payload.type === "prompt-sent" && typeof payload.requestId === "string") {
+        const waiter = sendWaiters.get(payload.requestId);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          sendWaiters.delete(payload.requestId);
+          waiter.resolve();
+        }
+      } else if (payload.type === "prompt-send-failed" && typeof payload.requestId === "string") {
+        const waiter = sendWaiters.get(payload.requestId);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          sendWaiters.delete(payload.requestId);
+          waiter.reject(new Error(typeof payload.error === "string" ? payload.error : "chat send failed"));
+        }
       } else if (payload.type === "threads" && Array.isArray(payload.threads)) {
         entry.sessions = {
           rows: payload.threads as SessionRow[],
@@ -125,6 +226,8 @@ export function activate(context: vscode.ExtensionContext) {
       listener.dispose();
       disposal.dispose();
       webviews.delete(webview);
+      panelAttach.delete(webview);
+      for (const [sid, wv] of attachedClients) if (wv === webview) attachedClients.delete(sid);
     });
     const entry: ChatEntry = { host, cleanup, sessions: { rows: [], canDelete: false } };
     webviews.set(webview, entry);

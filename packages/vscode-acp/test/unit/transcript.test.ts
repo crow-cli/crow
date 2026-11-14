@@ -41,7 +41,7 @@ describe("transcript accumulation", () => {
     agent.chunk(sock, sessionId, "lo ");
     agent.chunk(sock, sessionId, "world");
     agent.state(sock, sessionId, "idle", "end_turn");
-    expect(await pending).toEqual({ stopReason: "end_turn" });
+    expect(await pending).toMatchObject({ stopReason: "end_turn" });
     expect(row(backend, sessionId).lastAssistantMessage).toBe("Hello world");
   });
 

@@ -29,6 +29,16 @@ Base committed: 49b833b (shim + prompt/cancel wrappers, 18 unit / 4 integration 
 - Smoke script: packages/vscode-acp/e2e/ide-smoke.ts (stream B; run with `bun e2e/ide-smoke.ts` from packages/vscode-acp). SMOKE PASS on qwen4-max 2026-11-13 20:58.
 - Integration model: qwen4-max (user directive 2026-11-13; crow-cli config resolves credentials, no env key needed; remote, parallel-safe). Never system crow binaries, never Astra.
 
+## Headed coordination (user correction 2026-11-13: delegation must run THROUGH THE VISIBLE CLIENT, never headless)
+
+The original mandate, restated by the user: MCP tools that delegate must run HEADED inside the IDE via the extension — the prompt goes through the frontend chat client, visibly. The headless control-connection path built in phases 2-3 was wrong for the product path (kept only as the test/fallback seam).
+
+- [x] crow_prompt lands in the visible chat: ClientBridge seam (backend.ts) + extension bridge (attach binds the owning webview or opens a new editor pane; send delivers via composer.setText+send — the typed-message path). crow_prompt without sessionId opens a NEW editor-pane chat. prompt_worker + loop handoff ride the same bridge. DONE 2026-11-13: unit 47/47 incl. 5 headed tests (control connection never opened); integration 8/8; e2e SMOKE PASS with live headed proof — crow_prompt to the open window's session shows prompt+reply in that chat, crow_prompt without sessionId opens a NEW editor pane and runs there (fixed the pane's restore-on-connect hijacking the attach: send re-verifies the session and waits for composer readiness).
+- [ ] Split rlm (session/fork) and task (session/new) into their own MCP servers that run headed inside the IDE via the extension — each delegation opens/forks a VISIBLE chat pane.
+- [ ] MCP scheduling server: wake the agent from idle when a long-running command (real process/PID/command, NOT a subagent) finishes — rio-style notification, celery-like scheduling through the MCP. "I'm running this command and I will wake when it finishes."
+- [ ] Bring crow-research back-and-forth capabilities back into the extension.
+- [ ] Extension API backend for the MCP to interact with (the ClientBridge is the first piece; generalize into a proper extension API surface).
+
 ## Deferred (reason recorded)
 
 - Killing tool children on ACP cancel (sleep survives cancel): crow-cli driver work, outside the shim's turn contract. Observed, not a shim bug.

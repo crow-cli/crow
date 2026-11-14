@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 /** The slice of Backend the MCP tools need; Backend satisfies it structurally. */
 export type McpBackend = {
   status(): Record<string, unknown>;
-  prompt(params: { sessionId?: string; prompt?: unknown; cwd?: string }): Promise<{ stopReason: string }>;
+  prompt(params: { sessionId?: string; prompt?: unknown; cwd?: string }): Promise<{ stopReason: string; sessionId: string }>;
   cancel(params: { sessionId?: string }): Promise<Record<string, never>>;
   promptWorker(params: { prompt?: unknown }): Promise<{ accepted: true }>;
 };
@@ -22,15 +22,15 @@ const TOOLS = [
   {
     name: "crow_prompt",
     description:
-      "Prompt another agent session through the backend and wait for its turn to end. Returns the stop reason and the session's final assistant message. The target session keeps streaming to its own webview.",
+      "Prompt an agent session through its VISIBLE IDE chat and wait for its turn to end. The prompt is delivered through the chat client that owns the session: it appears in the open window and the reply streams there. Omit sessionId to open a new editor-pane chat. Returns the stop reason, the session id, and the session's final assistant message.",
     inputSchema: {
       type: "object",
       properties: {
-        sessionId: { type: "string", description: "Target session id (see crow_status)." },
+        sessionId: { type: "string", description: "Target session id (see crow_status). Omit to open a new visible chat pane." },
         prompt: { type: "string", description: "The prompt text." },
-        cwd: { type: "string", description: "Working directory; needed only when the backend has never seen the session." },
+        cwd: { type: "string", description: "Working directory; needed only when the backend has never seen the session (headless mode)." },
       },
-      required: ["sessionId", "prompt"],
+      required: ["prompt"],
       additionalProperties: false,
     },
   },
@@ -67,9 +67,9 @@ async function callTool(backend: McpBackend, name: string, args: any): Promise<u
       return backend.status();
     case "crow_prompt": {
       const prompt = typeof args.prompt === "string" ? [{ type: "text", text: args.prompt }] : args.prompt;
-      const { stopReason } = await backend.prompt({ sessionId: args.sessionId, prompt, cwd: args.cwd });
-      const row = (backend.status().sessions as any[]).find((s) => s.sessionId === args.sessionId);
-      return { stopReason, message: row?.lastAssistantMessage ?? "" };
+      const { stopReason, sessionId } = await backend.prompt({ sessionId: args.sessionId, prompt, cwd: args.cwd });
+      const row = (backend.status().sessions as any[]).find((s) => s.sessionId === sessionId);
+      return { stopReason, sessionId, message: row?.lastAssistantMessage ?? "" };
     }
     case "crow_cancel":
       return backend.cancel({ sessionId: args.sessionId });

@@ -1,6 +1,6 @@
-import { StrictMode, useEffect, useMemo, useState } from "react";
+import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { useAcpAgentCapabilities, useAcpSessionId } from "@assistant-ui/acp";
+import { acpExtras, useAcpAgentCapabilities, useAcpSessionId } from "@assistant-ui/acp";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import { ChatSession, ChatThread } from "@/components/chat-session";
 import { ModelSelector } from "@/components/model-selector";
@@ -19,6 +19,7 @@ const settings = JSON.parse(document.getElementById("crow-acp-settings")!.textCo
   protocol: "auto" | "1" | "2";
   mcpConfig: string;
   mcpEndpoint?: string;
+  attach?: { requestId: string; sessionId?: string };
 };
 const mcp = parseMcpConfig(settings.mcpConfig);
 // The shim's coordination tools ride the proxy's own port, which is minted
@@ -71,8 +72,30 @@ function VscodeBridge() {
       })),
     });
   }, [threads, activeId, canDelete]);
+  // Headed delegation: the extension binds this pane to a session, then
+  // delivers the prompt through the composer — the exact path a typed
+  // message takes, so the turn is visible in this chat.
+  const attachAndReport = async (requestId: string, sessionId?: string) => {
+    try {
+      if (sessionId) await aui.threads.switchToThread(sessionId);
+      else await aui.threads.switchToNewThread();
+      const sid = acpExtras.get(aui).sessionId;
+      if (!sid) throw new Error("chat client has no session after attach");
+      vscode.postMessage({ type: "prompt-attached", requestId, sessionId: sid });
+    } catch (err) {
+      vscode.postMessage({ type: "prompt-attach-failed", requestId, error: String(err) });
+    }
+  };
+  const attachStarted = useRef(false);
   useEffect(() => {
-    const onMessage = (event: MessageEvent<{ type?: string; id?: string }>) => {
+    const attach = settings.attach;
+    if (!attach || attachStarted.current) return;
+    attachStarted.current = true;
+    void attachAndReport(attach.requestId, attach.sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aui]);
+  useEffect(() => {
+    const onMessage = (event: MessageEvent<{ type?: string; id?: string; requestId?: string; sessionId?: string; text?: string }>) => {
       switch (event.data?.type) {
         case "switch-thread":
           if (event.data.id) aui.threads.switchToThread(event.data.id);
@@ -89,10 +112,39 @@ function VscodeBridge() {
         case "collapse-all":
           collapseAll.toggle();
           break;
+        case "prompt-attach":
+          if (event.data.requestId) void attachAndReport(event.data.requestId, event.data.sessionId);
+          break;
+        case "prompt-send": {
+          const { requestId, sessionId, text } = event.data;
+          if (!requestId || typeof text !== "string") break;
+          void (async () => {
+            try {
+              // The pane's own restore-on-connect may have landed on another
+              // thread after attach reported; force the attached session.
+              const deadline = Date.now() + 20000;
+              for (;;) {
+                if (sessionId && acpExtras.get(aui).sessionId !== sessionId) {
+                  await aui.threads.switchToThread(sessionId);
+                }
+                aui.composer.setText(text);
+                if (aui.composer.getState().canSend) break;
+                if (Date.now() > deadline) throw new Error("composer never became ready to send");
+                await new Promise((r) => setTimeout(r, 100));
+              }
+              aui.composer.send();
+              vscode.postMessage({ type: "prompt-sent", requestId });
+            } catch (err) {
+              vscode.postMessage({ type: "prompt-send-failed", requestId, error: String(err) });
+            }
+          })();
+          break;
+        }
       }
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aui]);
   return null;
 }
