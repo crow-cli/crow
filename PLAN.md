@@ -40,10 +40,10 @@ LANES (two live streams of this session are working the sprint; coordinate here,
 - [x] 2.2 http.Server under the proxy WSS; MCP Streamable HTTP at /mcp: initialize, tools/list, tools/call for crow_status, crow_prompt {sessionId, prompt} -> {stopReason, message} (waits turn end, returns accumulated final assistant text), crow_cancel {sessionId}. JSON-RPC over POST, session header per MCP spec.
   Verify: NEW unit tests — real HTTP round-trips against Backend+FakeAgent: initialize handshake, tools/list names, crow_prompt returns worker's exact final text, crow_cancel stops held turn. Existing suites green.
   REVIEW (stream B): mcp.test.ts's crow_prompt test only asserts typeof message === 'string' — the criterion says EXACT final text; assert toBe('answer'). Also verify the wire-up: /mcp must answer on the PROXY port itself (2.3 proves it end-to-end).
-- [x] 2.3 Integration: conductor session with shim MCP configured delegates to worker session via crow_prompt through the real daemon; result contains worker's answer; both sessions visible in shim status.
+- [x] 2.3 Integration: conductor session with backend MCP configured delegates to worker session via crow_prompt through the real daemon; result contains worker's answer; both sessions visible in backend status.
   Verify: new integration test green vs source daemon + glm-5.3-flash. Commit phase 2.
-  DONE 2026-11-13 (stream A): integration 7/7 (580s) — crow_prompt returns worker's exact final message; conductor delegates through the shim MCP via the real fastmcp client (188s). Unit 37/37 incl. exact-text assertion (stream B review addressed) and /mcp-on-proxy-port wire-up test.
-- [x] 2.4 Webview auto-injection of the shim MCP url (discovered scope): Backend.mcpEndpoint getter, extension settings carry it, chat webview appends the crow-backend http server unless the user config already names it.
+  DONE 2026-11-13 (stream A): integration 7/7 (580s) — crow_prompt returns worker's exact final message; conductor delegates through the backend MCP via the real fastmcp client (188s). Unit 37/37 incl. exact-text assertion (stream B review addressed) and /mcp-on-proxy-port wire-up test.
+- [x] 2.4 Webview auto-injection of the backend MCP url (discovered scope): Backend.mcpEndpoint getter, extension settings carry it, chat webview appends the crow-backend http server unless the user config already names it.
   DONE 2026-11-13 (stream A): typecheck + build green; LIVE PROOF 20:58 — 3.4 smoke on qwen4-max: webview conductor called prompt_worker via the auto-injected crow-backend MCP server (2 cycles, exact handoff).
 
 
@@ -59,10 +59,10 @@ MODEL-SERVER LANE: obsolete — qwen4-max is remote and parallel-safe (see LANES
   DONE 2026-11-13 (stream A): 6-cycle exact-handoff unit test, reprimand test, disarm-halts test green; full unit 42/42, build+typecheck green.
 - [x] 3.3 Integration: real daemon, arm loop, >= 3 live cycles, then disarm; sessions stay usable.
   Verify: new integration test green.
-  DONE 2026-11-13 (stream A): FULL integration gate 8/8 in 89s on qwen4-max — loop 3 live cycles + disarm + worker still usable (39s); daemon 5/5 incl. cancel (sleep 67 started, turn cancelled, session usable) and external SIGKILL death; mcp 2/2 incl. conductor delegating through the shim MCP via fastmcp client (10s).
-- [x] 3.4 E2E: recreate smoke (kernel smoke_v2), extend — second session via proxy WS, arm loop, prompt conductor in webview, observe >= 2 cycles via shim status, reload kills daemon. Run to green vs repo-tree server (8088, grace 0).
+  DONE 2026-11-13 (stream A): FULL integration gate 8/8 in 89s on qwen4-max — loop 3 live cycles + disarm + worker still usable (39s); daemon 5/5 incl. cancel (sleep 67 started, turn cancelled, session usable) and external SIGKILL death; mcp 2/2 incl. conductor delegating through the backend MCP via fastmcp client (10s).
+- [x] 3.4 E2E: recreate smoke (kernel smoke_v2), extend — second session via proxy WS, arm loop, prompt conductor in webview, observe >= 2 cycles via backend status, reload kills daemon. Run to green vs repo-tree server (8088, grace 0).
   Verify: smoke prints SMOKE PASS; no orphan daemons after. Commit phase 3.
-  DONE 2026-11-13: stream B built e2e/ide-smoke.ts and ran it GREEN on the local model (20:33, screenshots + server-log reload/dispose sequence). Stream A RE-RAN it on qwen4-max vs the committed+deployed phase-3 build (1a3c1bf): SMOKE PASS exit 0 — port cycle 2771->2772, webview turn smoke-ok observed by shim, 2 loop cycles with exact ping-2 handoff, disarm, reload killed daemon 1103016 and spawned 1103400, PAGEERRORS [], no orphans. This run also proves 2.4 live: the webview conductor called prompt_worker through the auto-injected shim MCP.
+  DONE 2026-11-13: stream B built e2e/ide-smoke.ts and ran it GREEN on the local model (20:33, screenshots + server-log reload/dispose sequence). Stream A RE-RAN it on qwen4-max vs the committed+deployed phase-3 build (1a3c1bf): SMOKE PASS exit 0 — port cycle 2771->2772, webview turn smoke-ok observed by backend, 2 loop cycles with exact ping-2 handoff, disarm, reload killed daemon 1103016 and spawned 1103400, PAGEERRORS [], no orphans. This run also proves 2.4 live: the webview conductor called prompt_worker through the auto-injected backend MCP.
 
 ## Done
 

@@ -14,7 +14,7 @@ const text = (t: string) => [{ type: "text", text: t }];
 
 /** The bridge the extension provides, exercised here with a real client
  * connection standing in for the webview: attach binds the session, send
- * delivers the prompt through that client's own socket — never the shim's
+ * delivers the prompt through that client's own socket — never the backend's
  * control connection. */
 async function setup(opts: { autoTurn?: boolean } = {}) {
   const agent = new FakeAgent({ autoTurn: opts.autoTurn ?? true });

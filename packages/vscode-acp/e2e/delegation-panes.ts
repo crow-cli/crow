@@ -41,13 +41,13 @@ async function findChatFrame(timeoutMs = 90000): Promise<Frame> {
   }
   throw new Error("no chat frame with a textarea");
 }
-async function shim(frame: Frame): Promise<any> {
+async function backend(frame: Frame): Promise<any> {
   const settings = await frame.evaluate(() =>
     JSON.parse(document.getElementById("crow-acp-settings")!.textContent!));
   const port = Number(new URL(settings.endpoint).port);
   return await new Promise<any>((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/acp`);
-    const timer = setTimeout(() => { ws.terminate(); reject(new Error("shim status timeout")); }, 5000);
+    const timer = setTimeout(() => { ws.terminate(); reject(new Error("backend status timeout")); }, 5000);
     ws.on("open", () => ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "_crow/backend/status" })));
     ws.on("message", (d) => {
       clearTimeout(timer);
@@ -71,7 +71,7 @@ async function send(frame: Frame, text: string) {
 async function waitSession(frame: Frame, match: (s: any) => boolean, timeoutMs = 180000): Promise<any> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const { status } = await shim(frame);
+    const { status } = await backend(frame);
     const sess = (status.sessions as any[]).find((s) => s.state === "idle" && s.stopReason === "end_turn" && match(s));
     if (sess) return sess;
     if (Date.now() > deadline) throw new Error("turn never ended");
@@ -82,7 +82,7 @@ async function mintNew(frame: Frame, known: string[], button: ReturnType<typeof 
   await button.click();
   const deadline = Date.now() + 30000;
   for (;;) {
-    const ids = ((await shim(frame)).status.sessions as any[]).map((s) => s.sessionId);
+    const ids = ((await backend(frame)).status.sessions as any[]).map((s) => s.sessionId);
     const fresh = ids.find((id) => !known.includes(id));
     if (fresh) return fresh;
     if (Date.now() > deadline) throw new Error("New Session never minted a session");
@@ -158,7 +158,7 @@ const e2 = await mintNew(caller, [sOne.sessionId, e1], editorNew);
 await send(caller, "Reply with exactly: editor-two");
 await waitSession(caller, (s) => s.sessionId === e2 && (s.lastAssistantMessage ?? "").includes("editor-two"));
 log("caller sessions:", e1, "(inactive) and", e2, "(active)");
-const { port } = await shim(caller);
+const { port } = await backend(caller);
 
 // A. delegate to a session NO pane is active on: must open its OWN new pane,
 // load the called transcript there, and leave sidebar + caller untouched

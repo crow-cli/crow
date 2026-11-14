@@ -10,7 +10,7 @@ export type FakeAgentOptions = {
 };
 
 /** A deterministic ACP v2 agent over real WebSocket: enough of the protocol
- * to exercise the shim without a model. Mirrors the daemon's turn contract —
+ * to exercise the backend without a model. Mirrors the daemon's turn contract —
  * prompt acknowledges, states travel as session/update, park idles carry no
  * stopReason, cancel is answered with idle(cancelled). */
 export class FakeAgent {

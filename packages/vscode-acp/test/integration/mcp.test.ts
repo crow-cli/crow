@@ -87,7 +87,7 @@ describe("coordination MCP against the real daemon", () => {
     }
   }, 180000);
 
-  test("a conductor session delegates through the shim MCP and reports the answer", async () => {
+  test("a conductor session delegates through the backend MCP and reports the answer", async () => {
     const conductor = await connect();
     const worker = await connect();
     const w = await worker.request("session/new", { cwd: tmpCwd(), mcpServers: [] });

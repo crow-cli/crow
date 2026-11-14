@@ -5,7 +5,7 @@ import { attachMcp } from "./mcp.js";
 import * as http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 
-/** What the shim knows about one agent session, from state_update alone. */
+/** What the backend knows about one agent session, from state_update alone. */
 export type SessionInfo = {
   sessionId: string;
   state: string;
@@ -35,7 +35,7 @@ export type ClientBridge = {
   /** Bind a visible chat client to the session, opening an editor pane when
    * no open window owns it. Omit sessionId to mint a fresh visible session.
    * Resolves with the sessionId once the client is attached, BEFORE any
-   * prompt is sent, so the shim can register its turn waiter first. */
+   * prompt is sent, so the backend can register its turn waiter first. */
   attach(sessionId?: string): Promise<string>;
   /** Deliver the prompt through the attached client's own ACP connection —
    * the same path a typed message takes. */
@@ -68,7 +68,7 @@ type TurnWaiter = Pending & { cancel: () => void };
 /**
  * One upstream daemon connection, optionally paired with a downstream webview
  * socket. Frames pass through verbatim; the backend parses copies to track
- * sessions. Shim-originated requests use string ids (`crow-shim-N`) so they
+ * sessions. Backend-originated requests use string ids (`crow-backend-N`) so they
  * cannot collide with the webview's numeric id counter, and their responses
  * are consumed here instead of reaching the webview.
  */
@@ -129,7 +129,7 @@ class Conn {
   }
 
   request(method: string, params: unknown): Promise<any> {
-    const id = `crow-shim-${this.nextId++}`;
+    const id = `crow-backend-${this.nextId++}`;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.sendText(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
@@ -150,17 +150,17 @@ class Conn {
 }
 
 /**
- * The window's coordination shim. Spawns one multi-tenant `crow-cli acp2
+ * The window's coordination backend. Spawns one multi-tenant `crow-cli acp2
  * --http` daemon (cycling ports until one binds) and proxies every webview
  * ACP connection through itself, because ACP only sends session updates to
- * the owning connection — a shim off to the side would see nothing.
+ * the owning connection — a backend off to the side would see nothing.
  *
  * Coordination rides extension methods, answered here in both directions:
  * `_crow/backend/status`, `_crow/backend/prompt` (a session/prompt wrapper
  * that settles on the turn's idle state_update) and `_crow/backend/cancel`
  * (session/cancel). Prompts route through the connection that owns the
  * session so its webview keeps seeing updates; orphaned sessions are resumed
- * on a shim-held control connection. The daemon lives and dies with the
+ * on a backend-held control connection. The daemon lives and dies with the
  * window: dispose() kills it.
  */
 export class Backend {
@@ -382,7 +382,7 @@ export class Backend {
   /** Async delegation: deliver the prompt through the visible client and
    * return immediately. When the called session finishes, its final message
    * travels back to the caller as a fresh prompt, queued until the caller is
-   * idle — the shim controls when session/prompt lands on both agents. */
+   * idle — the backend controls when session/prompt lands on both agents. */
   async promptAsync(params: { sessionId?: string; prompt?: unknown; cwd?: string; callerSessionId?: string }): Promise<{ sessionId: string }> {
     const { sessionId } = await this.beginPrompt(params, false);
     const caller = params.callerSessionId;

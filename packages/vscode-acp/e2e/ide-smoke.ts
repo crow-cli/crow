@@ -24,15 +24,15 @@ async function findChatFrame(timeoutMs = 90000): Promise<Frame> {
 }
 
 async function findProxy(frame: Frame): Promise<{ port: number; status: any }> {
-  // The window's OWN shim: the chat frame's settings carry its proxy endpoint.
-  // Scanning listening ports would grab another window's shim when several
+  // The window's OWN backend: the chat frame's settings carry its proxy endpoint.
+  // Scanning listening ports would grab another window's backend when several
   // IDE windows share the server.
   const settings = await frame.evaluate(() =>
     JSON.parse(document.getElementById("crow-acp-settings")!.textContent!));
   const port = Number(new URL(settings.endpoint).port);
   return await new Promise<any>((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/acp`);
-    const timer = setTimeout(() => { ws.terminate(); reject(new Error("shim status timeout")); }, 5000);
+    const timer = setTimeout(() => { ws.terminate(); reject(new Error("backend status timeout")); }, 5000);
     ws.on("open", () => ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "_crow/backend/status" })));
     ws.on("message", (d) => {
       clearTimeout(timer);
@@ -88,11 +88,11 @@ log("daemon cmdline:", cmdline);
 if (!cmdline.includes("crow-cli")) throw new Error("daemon is not crow-cli");
 await page.screenshot({ path: "/tmp/smoke-final-chat.png" });
 
-// 4. real prompt through the webview -> shim -> daemon; the shim's status is
+// 4. real prompt through the webview -> backend -> daemon; the backend's status is
 // the authoritative turn-end signal (the echoed prompt is not a reply)
 await chat.locator("textarea").first().fill("Reply with exactly: smoke-ok");
 await chat.locator("textarea").first().press("Enter");
-log("prompt sent, polling shim for turn end");
+log("prompt sent, polling backend for turn end");
 let turnSession: any;
 const turnDeadline = Date.now() + 180000;
 for (;;) {
@@ -109,12 +109,12 @@ await chat.locator('[data-role="assistant"]').getByText("smoke-ok", { exact: fal
 log("assistant reply visible in chat");
 await page.screenshot({ path: "/tmp/smoke-final-reply.png" });
 
-// 5. shim observed the turn
+// 5. backend observed the turn
 await page.waitForTimeout(1500);
 const after = await findProxy(chat);
 const sess = after.status.sessions as any[];
 log("sessions after turn:", JSON.stringify(sess));
-if (!sess.some((s) => s.state === "idle" && s.stopReason === "end_turn")) throw new Error("shim did not observe idle(end_turn)");
+if (!sess.some((s) => s.state === "idle" && s.stopReason === "end_turn")) throw new Error("backend did not observe idle(end_turn)");
 
 
 // 5.6 HEADED delegation: crow_prompt must land in the VISIBLE chat. The

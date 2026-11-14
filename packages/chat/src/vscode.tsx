@@ -22,7 +22,7 @@ const settings = JSON.parse(document.getElementById("crow-acp-settings")!.textCo
   attach?: { requestId: string; sessionId?: string };
 };
 const mcp = parseMcpConfig(settings.mcpConfig);
-// The shim's coordination tools ride the proxy's own port, which is minted
+// The backend's coordination tools ride the proxy's own port, which is minted
 // per window — the extension hands it over so no static config can know it.
 const mcpServers = settings.mcpEndpoint && !mcp.servers.some((s) => s.name === "crow-backend")
   ? [...mcp.servers, { type: "http" as const, name: "crow-backend", url: settings.mcpEndpoint, headers: [] }]

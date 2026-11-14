@@ -42,13 +42,13 @@ async function findChatFrame(timeoutMs = 90000): Promise<Frame> {
   throw new Error("no chat frame with a textarea");
 }
 
-async function shim(frame: Frame): Promise<any> {
+async function backend(frame: Frame): Promise<any> {
   const settings = await frame.evaluate(() =>
     JSON.parse(document.getElementById("crow-acp-settings")!.textContent!));
   const port = Number(new URL(settings.endpoint).port);
   return await new Promise<any>((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/acp`);
-    const timer = setTimeout(() => { ws.terminate(); reject(new Error("shim status timeout")); }, 5000);
+    const timer = setTimeout(() => { ws.terminate(); reject(new Error("backend status timeout")); }, 5000);
     ws.on("open", () => ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "_crow/backend/status" })));
     ws.on("message", (d) => {
       clearTimeout(timer);
@@ -75,7 +75,7 @@ async function send(frame: Frame, text: string) {
 async function waitSession(frame: Frame, match: (s: any) => boolean, timeoutMs = 180000): Promise<any> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const status = await shim(frame);
+    const status = await backend(frame);
     const sess = (status.sessions as any[]).find((s) => s.state === "idle" && s.stopReason === "end_turn" && match(s));
     if (sess) return sess;
     if (Date.now() > deadline) throw new Error("turn never ended");
@@ -128,7 +128,7 @@ await editorNew.click();
 let eNewId: string | undefined;
 const mintDeadline = Date.now() + 30000;
 while (Date.now() < mintDeadline && !eNewId) {
-  const ids = ((await shim(editor)).sessions as any[]).map((s) => s.sessionId);
+  const ids = ((await backend(editor)).sessions as any[]).map((s) => s.sessionId);
   eNewId = ids.find((id) => id !== sOne.sessionId);
   if (!eNewId) await page.waitForTimeout(500);
 }
@@ -143,10 +143,10 @@ await sidebarSwitch.waitFor({ timeout: 15000 });
 await editorNew.waitFor({ timeout: 15000 });
 
 // 3. REGRESSION: sidebar New Session must mint the session in the SIDEBAR
-const idsBefore = ((await shim(sidebar)).sessions as any[]).map((s) => s.sessionId);
+const idsBefore = ((await backend(sidebar)).sessions as any[]).map((s) => s.sessionId);
 await sidebarNew.click();
 await page.waitForTimeout(3000);
-const idsAfter = ((await shim(sidebar)).sessions as any[]).map((s) => s.sessionId);
+const idsAfter = ((await backend(sidebar)).sessions as any[]).map((s) => s.sessionId);
 const fresh = idsAfter.filter((id) => !idsBefore.includes(id));
 if (fresh.length !== 1) throw new Error(`expected one new session, got ${JSON.stringify(fresh)}`);
 if (await userText(sidebar, "sidebar-one").count() !== 0)

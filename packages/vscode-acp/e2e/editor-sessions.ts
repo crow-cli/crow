@@ -32,13 +32,13 @@ async function findChatFrame(timeoutMs = 90000): Promise<Frame> {
   throw new Error("no chat frame with a textarea");
 }
 
-async function shim(frame: Frame): Promise<{ port: number; status: any }> {
+async function backend(frame: Frame): Promise<{ port: number; status: any }> {
   const settings = await frame.evaluate(() =>
     JSON.parse(document.getElementById("crow-acp-settings")!.textContent!));
   const port = Number(new URL(settings.endpoint).port);
   return await new Promise<any>((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/acp`);
-    const timer = setTimeout(() => { ws.terminate(); reject(new Error("shim status timeout")); }, 5000);
+    const timer = setTimeout(() => { ws.terminate(); reject(new Error("backend status timeout")); }, 5000);
     ws.on("open", () => ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "_crow/backend/status" })));
     ws.on("message", (d) => {
       clearTimeout(timer);
@@ -60,7 +60,7 @@ async function palette(command: string) {
 async function waitTurnEnd(frame: Frame, timeoutMs = 180000): Promise<any> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const { status } = await shim(frame);
+    const { status } = await backend(frame);
     const sess = (status.sessions as any[]).find((s) => s.state === "idle" && s.stopReason === "end_turn");
     if (sess) return sess;
     if (Date.now() > deadline) throw new Error("turn never ended");
@@ -86,8 +86,8 @@ await palette("Crow ACP: Open Chat");
 const chat = await findChatFrame();
 log("editor chat frame found");
 await page.waitForTimeout(3000);
-const { port } = await shim(chat);
-log("shim on port", port);
+const { port } = await backend(chat);
+log("backend on port", port);
 await page.screenshot({ path: "/tmp/editor-1-open.png" });
 
 // the tab title must carry the session actions
@@ -106,10 +106,10 @@ await chat.locator('[data-role="assistant"]').getByText("editor-one", { exact: f
 await page.screenshot({ path: "/tmp/editor-2-first-turn.png" });
 
 // 3. NEW SESSION via the tab title button
-const idsBefore = ((await shim(chat)).status.sessions as any[]).map((s) => s.sessionId);
+const idsBefore = ((await backend(chat)).status.sessions as any[]).map((s) => s.sessionId);
 await newBtn.click();
 await page.waitForTimeout(3000);
-const st2 = await shim(chat);
+const st2 = await backend(chat);
 const ids2 = (st2.status.sessions as any[]).map((s) => s.sessionId);
 const freshIds = ids2.filter((id) => !idsBefore.includes(id));
 if (freshIds.length !== 1) throw new Error(`expected exactly one new session, got ${JSON.stringify(freshIds)}`);
@@ -120,7 +120,7 @@ await chat.locator("textarea").first().press("Enter");
 const deadline2 = Date.now() + 180000;
 let two: any;
 for (;;) {
-  const { status } = await shim(chat);
+  const { status } = await backend(chat);
   two = (status.sessions as any[]).find((s) => s.sessionId === twoId && s.state === "idle" && s.stopReason === "end_turn");
   if (two) break;
   if (Date.now() > deadline2) throw new Error("session two turn never ended");

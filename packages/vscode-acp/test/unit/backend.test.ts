@@ -128,7 +128,7 @@ describe("session observation", () => {
 });
 
 describe("backend extension methods", () => {
-  test("status is answered by the shim, never forwarded to the agent", async () => {
+  test("status is answered by the backend, never forwarded to the agent", async () => {
     const { agent, endpoint } = await setup();
     const client = await connect(endpoint);
     const status = await client.request("_crow/backend/status");
@@ -152,7 +152,7 @@ describe("backend extension methods", () => {
     agent.send(sock, { jsonrpc: "2.0", id: 999, method: "_crow/backend/status" });
     await waitFor(
       () => agent.received.some((r) => r.frame.id === 999 && r.frame.result),
-      "shim answer to agent request",
+      "backend answer to agent request",
     );
     const answer = agent.received.find((r) => r.frame.id === 999 && r.frame.result)!.frame;
     expect(answer.result.sessions.length).toBe(1);
@@ -173,7 +173,7 @@ describe("prompt wrapper", () => {
     const promptFrame = agent.framesOf("session/prompt")[0];
     const newFrame = agent.framesOf("session/new")[0];
     expect(promptFrame.conn).toBe(newFrame.conn); // routed via the owner, not the caller
-    expect(String(promptFrame.frame.id).startsWith("crow-shim-")).toBe(true); // no id collision
+    expect(String(promptFrame.frame.id).startsWith("crow-backend-")).toBe(true); // no id collision
 
     const sock = promptFrame.conn;
     agent.chunk(sock, sessionId, "hello");
