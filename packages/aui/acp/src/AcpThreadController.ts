@@ -135,6 +135,7 @@ export class AcpThreadController implements AcpThreadControllerLike {
   private inflightPrompt: Promise<unknown> | undefined;
   private readonly runs: RunEntry[] = [];
   private startLock: Promise<void> = Promise.resolve();
+  private switchLock: Promise<void> = Promise.resolve();
   private unsubscribeSessionUpdate: (() => void) | undefined;
   private unsubscribeConnectionChange: (() => void) | undefined;
   private restorePermissionHandler: (() => void) | undefined;
@@ -294,6 +295,10 @@ export class AcpThreadController implements AcpThreadControllerLike {
    * thread accepting stray updates as history.
    */
   async switchToThread(sessionId: string): Promise<void> {
+    await this.withSwitchLock(() => this.doSwitchToThread(sessionId));
+  }
+
+  private async doSwitchToThread(sessionId: string): Promise<void> {
     if (this.state.sessionId === sessionId) return;
     await this.stopRunningTurn();
     this.dispatch({ type: "reset-thread" });
@@ -316,6 +321,10 @@ export class AcpThreadController implements AcpThreadControllerLike {
    * and the header show its id the moment the user asks for a new thread.
    */
   async switchToNewThread(): Promise<void> {
+    await this.withSwitchLock(() => this.doSwitchToNewThread());
+  }
+
+  private async doSwitchToNewThread(): Promise<void> {
     await this.stopRunningTurn();
     this.dispatch({ type: "reset-thread" });
     this.client.releaseSession();
@@ -324,16 +333,18 @@ export class AcpThreadController implements AcpThreadControllerLike {
 
   /** Delete a thread on the agent. Deleting the live one leaves it first. */
   async deleteThread(sessionId: string): Promise<void> {
-    const wasCurrent = this.state.sessionId === sessionId;
-    if (wasCurrent) await this.stopRunningTurn();
-    try {
-      await this.client.deleteSession(sessionId);
-    } catch (error) {
-      // Nothing was reset, so the thread on screen is still the truth.
-      this.reportError(error);
-      return;
-    }
-    if (wasCurrent) this.dispatch({ type: "reset-thread" });
+    await this.withSwitchLock(async () => {
+      const wasCurrent = this.state.sessionId === sessionId;
+      if (wasCurrent) await this.stopRunningTurn();
+      try {
+        await this.client.deleteSession(sessionId);
+      } catch (error) {
+        // Nothing was reset, so the thread on screen is still the truth.
+        this.reportError(error);
+        return;
+      }
+      if (wasCurrent) this.dispatch({ type: "reset-thread" });
+    });
   }
 
   /**
@@ -553,17 +564,23 @@ export class AcpThreadController implements AcpThreadControllerLike {
    * neither list nor load still gets a fresh `session/new`.
    */
   private async restoreOrCreate(): Promise<void> {
-    const caps = this.client.agentCapabilities;
-    if (caps?.loadSession && caps?.sessionCapabilities?.list) {
-      try {
-        const page = await this.client.listSessions();
-        const latest = page.sessions[0];
-        if (latest) await this.switchToThread(latest.sessionId);
-      } catch (error) {
-        this.reportError(error);
+    // Shares the switch lock with explicit thread switches: restore-on-connect
+    // and a user/delegation switchToNewThread must not interleave their
+    // reset-thread + mint/replay, or one pane ends up showing a transcript
+    // that belongs to a different session id.
+    await this.withSwitchLock(async () => {
+      const caps = this.client.agentCapabilities;
+      if (caps?.loadSession && caps?.sessionCapabilities?.list) {
+        try {
+          const page = await this.client.listSessions();
+          const latest = page.sessions[0];
+          if (latest) await this.doSwitchToThread(latest.sessionId);
+        } catch (error) {
+          this.reportError(error);
+        }
       }
-    }
-    await this.ensureSession();
+      await this.ensureSession();
+    });
   }
 
   /**
@@ -629,6 +646,16 @@ export class AcpThreadController implements AcpThreadControllerLike {
   private withStartLock<T>(fn: () => Promise<T>): Promise<T> {
     const result = this.startLock.then(fn, fn);
     this.startLock = result.then(noop, noop);
+    return result;
+  }
+
+  /** Serializes thread lifecycle (restore, switch, new, delete) so two of them
+   * cannot capture the same transcript/session mid-reset. Covers the whole
+   * operation, not just a prologue: a switch is short and the next one must
+   * see its finished state, never a half-applied reset. */
+  private withSwitchLock<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.switchLock.then(fn, fn);
+    this.switchLock = result.then(noop, noop);
     return result;
   }
 
