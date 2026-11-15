@@ -378,7 +378,7 @@ const ThreadScrollToBottom: FC = () => {
       <TooltipIconButton
         tooltip="Scroll to bottom"
         variant="outline"
-        className="aui-thread-scroll-to-bottom dark:border-border dark:bg-background dark:hover:bg-accent absolute -top-12 z-10 self-center rounded-full p-4 disabled:invisible"
+        className="aui-thread-scroll-to-bottom absolute -top-[48px] z-10 size-[36px] self-center rounded-full border-border bg-popover p-0 text-popover-foreground shadow-lg shadow-black/30 ring-1 ring-border transition-[opacity,transform,background-color] duration-150 hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:translate-y-1 disabled:opacity-0 [&_svg]:size-[16px] [&_svg]:stroke-[2.5]"
       >
         <ArrowDownIcon />
       </TooltipIconButton>
