@@ -118,8 +118,8 @@ export function activate(context: vscode.ExtensionContext) {
       const promise = new Promise<string>((resolve, reject) => {
         const timer = setTimeout(() => {
           attachWaiters.delete(requestId);
-          reject(new Error("chat client did not attach within 30s"));
-        }, 30000);
+          reject(new Error("chat client did not attach within 120s"));
+        }, 120000);
         attachWaiters.set(requestId, { resolve, reject, timer });
       });
       const owner = sessionId ? webviewForSession(sessionId) : undefined;
@@ -135,8 +135,8 @@ export function activate(context: vscode.ExtensionContext) {
       const ack = new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
           sendWaiters.delete(requestId);
-          reject(new Error("chat client did not accept the prompt within 15s"));
-        }, 15000);
+          reject(new Error("chat client did not accept the prompt within 120s"));
+        }, 120000);
         sendWaiters.set(requestId, { resolve, reject, timer });
       });
       void webview.postMessage({ type: "prompt-send", requestId, sessionId, text });

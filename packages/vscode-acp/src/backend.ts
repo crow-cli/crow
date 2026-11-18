@@ -744,7 +744,7 @@ export class Backend {
 const REPRIMAND = "[System reminder] you have to prompt worker with the prompt_worker tool to continue the loop.";
 
 const PORT_ATTEMPTS = 64;
-const READY_TIMEOUT_MS = 30_000;
+const READY_TIMEOUT_MS = 120_000;
 
 function portFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
