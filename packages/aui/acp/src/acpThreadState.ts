@@ -1,9 +1,10 @@
-import type {
-  CompleteAttachment,
-  MessageStatus,
-  ThreadAssistantMessage,
-  ThreadUserMessagePart,
-  ToolApprovalOption,
+import {
+  generateId,
+  type CompleteAttachment,
+  type MessageStatus,
+  type ThreadAssistantMessage,
+  type ThreadUserMessagePart,
+  type ToolApprovalOption,
 } from "@assistant-ui/core";
 import type {
   AcpAgentCapabilities,
@@ -26,6 +27,7 @@ import {
   attachToolCallApproval,
   permissionOptionToApprovalOption,
   resolveToolCallApproval,
+  stopReasonToMessageStatus,
   userPartsFromBlock,
 } from "./conversions";
 import {
@@ -47,7 +49,19 @@ export type AcpLoadState =
 
 export type AcpRunState =
   | { readonly type: "idle" }
-  | { readonly type: "running"; readonly assistantId: string };
+  | {
+      readonly type: "running";
+      /** Undefined until the first content update mints the message — an
+       * agent-origin run opens before its delivery echo has landed. */
+      readonly assistantId: string | undefined;
+      /** "agent" marks a turn the agent started on its own: a `state_update:
+       * running` with no client prompt in flight (a mailbox delivery, a goal
+       * continuation). The reducer owns its whole lifecycle — the idle edge
+       * settles it here, because no prompt promise exists to settle it. A
+       * client run (origin absent) is settled by the controller's run-end,
+       * which keeps the steered-handoff semantics intact. */
+      readonly origin?: "agent" | undefined;
+    };
 
 /**
  * A `session/load` replay window. The agent answers `session/load` only after
@@ -209,9 +223,34 @@ const withMessage = (
 const runningAssistant = (
   state: AcpThreadState,
 ): AcpAssistantMessage | undefined => {
-  if (state.run.type !== "running") return undefined;
+  if (state.run.type !== "running" || state.run.assistantId === undefined)
+    return undefined;
   const message = state.messagesById[state.run.assistantId];
   return message?.role === "assistant" ? message : undefined;
+};
+
+/**
+ * Give an agent-origin run its assistant message, lazily. The run opens on
+ * `state_update: running`, but the injected delivery echo (`user_message_chunk`)
+ * arrives next and belongs BEFORE the reply — minting on first content lets
+ * the delivery land at the transcript tip first, the same order the agent
+ * persisted them in. A run that ends without any content never mints one.
+ */
+const ensureRunAssistant = (state: AcpThreadState): AcpThreadState => {
+  if (state.run.type !== "running" || state.run.origin !== "agent") return state;
+  if (state.run.assistantId !== undefined) return state;
+  const message: AcpAssistantMessage = {
+    role: "assistant",
+    id: generateId(),
+    parentId: state.headId,
+    createdAt: Date.now(),
+    status: { type: "running" },
+    content: [],
+  };
+  return {
+    ...withMessage(state, message),
+    run: { ...state.run, assistantId: message.id },
+  };
 };
 
 /** A replayed turn ended before this process saw it: complete, reason unknown. */
@@ -289,13 +328,14 @@ const patchAssistant = (
   state: AcpThreadState,
   patch: (message: AcpAssistantMessage) => AcpAssistantMessage | undefined,
 ): AcpThreadState => {
-  const message = activeAssistant(state);
+  const base = ensureRunAssistant(state);
+  const message = activeAssistant(base);
   if (!message) return state;
   const next = patch(message);
-  if (!next || next === message) return state;
+  if (!next || next === message) return base;
   return {
-    ...state,
-    messagesById: { ...state.messagesById, [message.id]: next },
+    ...base,
+    messagesById: { ...base.messagesById, [message.id]: next },
   };
 };
 
@@ -399,6 +439,40 @@ const applyUserBlocks = (
 };
 
 /**
+ * A live injected delivery (user_message_chunk) joins the transcript inside
+ * the running turn. With the reply already minted it inserts BEFORE that
+ * assistant message and re-parents it, keeping the alternation the agent
+ * persisted: prompt, delivery, reply. With no reply yet (an agent-origin run
+ * before its first content) it simply lands at the tip.
+ */
+const appendLiveUserMessage = (
+  state: AcpThreadState,
+  parts: readonly ThreadUserMessagePart[],
+): AcpThreadState => {
+  const assistant = runningAssistant(state);
+  const message: AcpUserMessage = {
+    role: "user",
+    id: generateId(),
+    parentId: assistant ? assistant.parentId : state.headId,
+    createdAt: Date.now(),
+    content: parts,
+    attachments: [],
+  };
+  if (!assistant) return withMessage(state, message);
+  const messageOrder = [...state.messageOrder];
+  messageOrder.splice(messageOrder.indexOf(assistant.id), 0, message.id);
+  return {
+    ...state,
+    messageOrder,
+    messagesById: {
+      ...state.messagesById,
+      [message.id]: message,
+      [assistant.id]: { ...assistant, parentId: message.id },
+    },
+  };
+};
+
+/**
  * Patch the entity `id` names wherever its part lives, or open it in the
  * message an incoming update belongs to. The first sight of an id fixes the
  * compaction's position in the timeline — the part is appended where the update
@@ -429,7 +503,7 @@ const upsertCompaction = (
       },
     };
   }
-  const base = ensureReplayAssistant(state);
+  const base = ensureRunAssistant(ensureReplayAssistant(state));
   const message = activeAssistant(base);
   if (!message) return state;
   const content =
@@ -581,11 +655,20 @@ const reduceSessionUpdate = (
       return appendCompactionChunk(state, id, text);
     }
     case "user_message_chunk": {
-      // Live, the user's turn is already on screen — the controller appended it
-      // before prompting, so echoing it back would double it. In a replay it is
+      // Live, a user chunk inside a CLIENT run is the prompt's echo — the
+      // controller already put that message on screen, so rendering it would
+      // double it. Inside an AGENT-origin run it is new history: the injected
+      // mailbox delivery (an async task's result, a goal continuation) that
+      // woke the agent, and it belongs on screen. In a replay the chunk is
       // the only copy there is: the agent is handing back a turn the client
       // sent in some earlier process.
-      if (state.replay.type !== "active") return state;
+      if (state.replay.type !== "active") {
+        if (state.run.type !== "running" || state.run.origin !== "agent")
+          return state;
+        const parts = userPartsFromBlock(update.content);
+        if (parts.length === 0) return state;
+        return appendLiveUserMessage(state, parts);
+      }
       const parts = userPartsFromBlock(update.content);
       if (parts.length === 0) return state;
       const existing = headMessage(state, "user");
@@ -614,12 +697,44 @@ const reduceSessionUpdate = (
         replay: { type: "active", seq: state.replay.seq + 1 },
       };
     }
-    case "state_update":
-      // v2's turn boundary. The client's prompt promise resolves on the idle
-      // edge (and run-end is dispatched there), so the reducer has nothing to
-      // move. Returning here also keeps a stray `state_update` during replay
-      // from minting a spurious assistant message in the default arm.
+    case "state_update": {
+      // v2's turn boundary — and the ONLY signal that a turn the agent
+      // started on its own exists. A client-prompted turn is already running
+      // (run-start) and its prompt promise resolves on the idle edge, so for
+      // client runs both edges stay no-ops here; a stray state_update during
+      // replay must not mint a live run either.
+      if (state.replay.type === "active") return state;
+      if (update.state === "running") {
+        if (state.run.type === "running") return state;
+        return {
+          ...state,
+          run: { type: "running", assistantId: undefined, origin: "agent" },
+          toolCallStatuses: {},
+        };
+      }
+      if (update.state === "idle") {
+        if (state.run.type !== "running" || state.run.origin !== "agent")
+          return state;
+        // No prompt promise will settle this run: the reducer does, with the
+        // same closing run-end gives a client turn — permissions cancelled,
+        // the assistant's status from the stop reason, compactions settled.
+        const status = stopReasonToMessageStatus(update.stopReason ?? "end_turn");
+        const next = cancelPermissions(state);
+        const assistant = runningAssistant(next);
+        const settled: AcpThreadState = !assistant
+          ? { ...next, run: { type: "idle" } }
+          : {
+              ...next,
+              messagesById: {
+                ...next.messagesById,
+                [assistant.id]: { ...assistant, status },
+              },
+              run: { type: "idle" },
+            };
+        return settleCompactions(settled, status);
+      }
       return state;
+    }
     case "user_message": {
       // Live echo of the accepted prompt: already on screen. In a replay the
       // whole-message upsert is the only copy there is.

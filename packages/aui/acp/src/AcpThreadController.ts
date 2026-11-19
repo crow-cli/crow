@@ -146,7 +146,17 @@ export class AcpThreadController implements AcpThreadControllerLike {
     _sessionId: string,
     update: AcpSessionUpdate,
   ) => {
+    // An agent-origin run (a turn the agent started on its own) is settled
+    // by the reducer on the idle edge — no prompt promise exists to run
+    // settle() — so its pending permission asks are drained here, the same
+    // way settle() drains a client turn's. Without this the agent waits
+    // forever for an answer to a question whose turn is already over.
+    const agentRunInFlight =
+      this.state.run.type === "running" && this.state.run.origin === "agent";
     this.dispatch({ type: "session-update", update });
+    if (agentRunInFlight && this.state.run.type === "idle") {
+      void this.settlePermissions();
+    }
   };
 
   private readonly boundOnConnectionChange = (

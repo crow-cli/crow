@@ -28,7 +28,7 @@
  * read back the port the OS chose):
  *
  *   const agent = startStubAgent({ port: 0 });
- *   ... agent.url, agent.snapshot(), agent.reset(), agent.stop()
+ *   ... agent.url, agent.snapshot(), agent.wake(id, text), agent.reset(), agent.stop()
  */
 
 import type { ServerWebSocket } from "bun";
@@ -76,6 +76,10 @@ export type StubAgent = {
   url: string;
   port: number;
   snapshot(): StubSessionSnapshot[];
+  /** Run a turn the client never prompted: the agent woke on its own (an
+   * async task finished, a goal continuation) and streams a mailbox delivery
+   * plus its reply, bounded by `state_update` running/idle like any turn. */
+  wake(sessionId: string, delivery: string): void;
   reset(): void;
   stop(): void;
 };
@@ -126,6 +130,7 @@ export function startStubAgent(options: StubOptions = {}): StubAgent {
   const quiet = options.quiet ?? false;
 
   const sessions = new Map<string, Session>();
+  const clients = new Set<ServerWebSocket<Conn>>();
   let sessionSeq = 0;
   let messageSeq = 0;
 
@@ -415,6 +420,7 @@ export function startStubAgent(options: StubOptions = {}): StubAgent {
       open(ws) {
         log("client connected");
         ws.data.initialized = false;
+        clients.add(ws);
       },
       message(ws, raw) {
         let frame: any;
@@ -453,6 +459,7 @@ export function startStubAgent(options: StubOptions = {}): StubAgent {
       },
       close(ws) {
         log("client disconnected");
+        clients.delete(ws);
         // The sessions stay — that is the point of `session/list` — but a reply
         // still streaming into a dead socket stops here.
         for (const session of sessions.values()) {
@@ -480,6 +487,15 @@ export function startStubAgent(options: StubOptions = {}): StubAgent {
         model: session.model,
         turns: session.transcript.length,
       })),
+    wake: (sessionId, delivery) => {
+      const session = sessions.get(sessionId);
+      if (session === undefined) throw new Error(`Unknown session: ${sessionId}`);
+      // An autonomous turn reaches whoever is attached — the owner if a turn
+      // is in flight, otherwise any connected client.
+      const ws = session.owner ?? [...clients][0];
+      if (ws === undefined) throw new Error(`No client connected to wake ${sessionId}`);
+      runTurn(ws, session, delivery);
+    },
     reset: () => {
       for (const session of sessions.values()) clearTimers(session);
       sessions.clear();

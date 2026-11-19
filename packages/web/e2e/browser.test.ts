@@ -112,6 +112,31 @@ describe("the built page, as an ACP client", () => {
     await until(() => replyTo("second transcript").count(), 0, "the other thread's transcript to clear");
   }, TIMEOUT);
 
+  test("an autonomous turn the page never prompted renders and settles", async () => {
+    // The agent wakes on its own — an async task finished and its result is
+    // delivered to the mailbox — and runs a turn with no `session/prompt`
+    // from this page. The only announcement is `state_update: running`; a
+    // client that ignores state updates drops the whole turn on the floor.
+    const delivery =
+      "async task finished: the nightly build is green, all nine hundred and " +
+      "forty tests passed, the artifact was uploaded to the release bucket, " +
+      "the checksums match the manifest, and the deploy window opens at " +
+      "midnight UTC so the release notes still need a final review pass";
+    agent.wake("s1", delivery);
+
+    // The run is visible while it streams...
+    await page.getByTestId("working-indicator").waitFor({ timeout: TIMEOUT });
+    // ...the injected delivery lands as a user message...
+    await page.getByText(delivery, { exact: true }).waitFor({ timeout: TIMEOUT });
+    // ...and the reply accumulates into one assistant message.
+    await replyTo(delivery).waitFor({ timeout: TIMEOUT });
+    // The idle edge settles the run the page never started.
+    await until(() => page.getByTestId("working-indicator").count(), 0, "the autonomous run to settle");
+
+    // The thread is still usable: a normal prompt round-trips after it.
+    await prompt("after the wake");
+  }, TIMEOUT);
+
   test("the theme toggle changes the CSS and survives a reload", async () => {
     const light = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
     await page.getByTestId("theme-toggle").click();
