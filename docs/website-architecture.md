@@ -18,7 +18,7 @@ flowchart TD
 
     lb --- dns["DNS service<br/>allocates domains<br/>via Cloudflare API"]
     lb --- user["User service<br/>service for user info"]
-    lb --- reactor["Reactor service<br/>DigitalOcean API for building<br/>out hosted instances for users"]
+    lb --- resource["Resource service<br/>DigitalOcean API for building<br/>out hosted instances for users"]
     lb --- payments["Payments service<br/>processing payments for users /<br/>charge for our service"]
     lb --- agent["Agent service<br/>setting up agents/IDE<br/>on instances"]
     lb --- pds["PDS<br/>setting up PDS<br/>on instances"]
@@ -26,7 +26,7 @@ flowchart TD
 
     cf --> dns
     docean --> dns
-    docean --> reactor
+    docean --> resource
     stripe --> payments
 
     user --> db[("DB")]
@@ -38,7 +38,7 @@ flowchart TD
 
 - **crow-ai.dev** sits behind one **load balancer / ingress** — the board
   leaves the choice open: *nginx? caddy?*
-- Seven services hang off the ingress bus: **DNS**, **User**, **Reactor**,
+- Seven services hang off the ingress bus: **DNS**, **User**, **Resource**,
   **Payments**, **Agent**, **PDS**, **Tangled**.
 - **External providers** (ellipses on the board): Cloudflare (domains/DNS),
   DigitalOcean (instances), Stripe (payments).
@@ -46,4 +46,4 @@ flowchart TD
 - **Offboarding service** hangs below payments: disconnect users, transfer
   payments directly (back out through Stripe).
 - The three "on instances" services (Agent, PDS, Tangled) configure what
-  Reactor provisions — the instance itself is implied, not drawn as a box.
+  Resource provisions — the instance itself is implied, not drawn as a box.
