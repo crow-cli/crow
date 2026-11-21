@@ -18,7 +18,19 @@ on **their** droplet, in **their** name:
 - WASM hosting
 - WireGuard home-lab mirroring, droplet as fallback
 
-Model: one-time setup fee + recurring managed fee. Stop paying → keep the infrastructure.
+Model: up-front setup fee; providers charged in the customer's name; the recurring fee
+is for the **managed version only**. Stop paying → keep the infrastructure.
+
+**Control-plane framing (Thomas, 2026-11-21):** the control plane is hosted on the
+**customer's side**, not ours. crow-ai.dev is thin — a payments ledger, a one-shot script
+dispatcher (setup / update / disconnect), and a fleet of support crow agents. Everything
+on the droplet (dashboard, PDS, tangled, crow IDE, apps) is open source and administered
+there. The disconnect button works **by construction**: we stop billing and stop firing
+scripts; nothing proprietary runs on their box. The managed version's value *is* the
+support: **our crow agents talk to their crow agents** to diagnose, fix, and deploy
+across the mesh of managed services — so the agent-mesh research (grants, durable
+mailboxes, authenticated cross-host delivery) is the **managed-support transport**, not
+a separate product.
 
 ---
 
@@ -270,48 +282,73 @@ Elestio BYOVM (managed-on-your-VM), xCloud (OAuth-into-your-cloud).
 - "Our vibe-coded authenticator" = an atlogin-style atproto→OIDC bridge in front of
   authentik/Authelia. Note the irony: **atlogin literally describes itself as vibe-coded
   and never security-reviewed** — if we ship that pattern, the review is on us.
+- **All of this runs customer-side, open source** (control-plane framing above): PDS,
+  bridge, authentik/Authelia, and the catalog live on their droplet and are administered
+  there. The vendor holds no SSH keys and no app credentials — Cloudron's "we do not
+  have access to your server" is our architecture, not just our policy.
+- **The vendor's only access path is the agent mesh** (managed tier): our support crow
+  agents reach their crow agents through explicit, deny-by-default grants with durable,
+  authenticated delivery — not shared admin creds. Disconnect = grants revoked, scripts
+  stop; the auth stack keeps running untouched.
 
 ---
 
 ## Synthesis
 
-### Three hardest problems (ranked)
+### Three hardest problems (ranked, re-ranked for the customer-side control plane)
 
-1. **PDS → OIDC bridge for arbitrary apps.** The spec says atproto OAuth is not
-   OIDC-compatible; every catalog app expects vanilla OIDC. The only existing bridge
-   (atlogin) is self-declared vibe-coded and unreviewed. This is the load-bearing novel
-   security component of the whole product.
-2. **Multi-tenant provisioning orchestration.** Cloudflare Registrar beta has no
-   renewals/transfers/contact-updates; DO OAuth token lifecycle across many customer
-   accounts; knot master-key custody; failure modes spanning three providers. Each API
-   exists; the state machine across them is the product.
-3. **Home mirroring with custom domain + fallback.** Funnel can't do custom domains;
-   the WireGuard + Caddy health-check pattern is buildable, but the DNS/TLS/failover
-   semantics are genuinely ours to own.
+1. **PDS → OIDC bridge for arbitrary apps.** Unchanged: the spec says atproto OAuth is
+   not OIDC-compatible; every catalog app expects vanilla OIDC. The only existing bridge
+   (atlogin) is self-declared vibe-coded and unreviewed. It ships as customer-side open
+   source, so the security review is on us before we ship it, not after.
+2. **The agent-mesh support transport.** The recurring fee rides on our crow agents
+   safely diagnosing, fixing, and deploying on customer boxes: deny-by-default grants,
+   durable mailboxes/outboxes, authenticated cross-host delivery (Ed25519 + mTLS per the
+   mesh sketch). This was "a separate product" in the earlier framing; it is now the
+   core mechanism of the managed tier — and the trust surface customers are buying.
+3. **One-shot provisioning + mirroring, as customer-side scripts.** With no hosted
+   control plane, the orchestration lives in idempotent setup/update/disconnect scripts:
+   Cloudflare Registrar beta gaps (no renewals/transfers/contact-updates), DO OAuth
+   token lifecycle, knot master-key custody/escrow, and the WireGuard + Caddy
+   custom-domain failover semantics (Funnel can't do custom domains). Each piece exists;
+   the script layer that composes them — and disconnects cleanly — is the build.
 
 ### Three "already exists, just wire it" wins
 
 1. **Domain purchase**: Cloudflare Registrar API beta (at-cost, already in their MCP) +
    Porkbun API as the full-lifecycle fallback. Wireable today.
 2. **"In your name" cloud**: DO OAuth API + xCloud precedent + **10% recurring
-   affiliate**. Solved pattern with a margin kicker.
-3. **Catalog + SSO + CI economics**: Cloudron's OIDC/LDAP catalog model,
-   authentik/Authelia as fleet IdP, Forgejo retention defaults — all on $6–12 droplets.
+   affiliate**. Solved pattern with a margin kicker — and with the thin vendor it's the
+   *only* infra relationship we have.
+3. **Catalog + SSO + CI economics, and most of the support transport**: Cloudron's
+   OIDC/LDAP catalog model, authentik/Authelia as fleet IdP, Forgejo retention defaults —
+   all on $6–12 droplets, all customer-side. The mesh transport also has existing hooks:
+   crow-cli already has `wake`/`claim_deliveries` and the crow backend has
+   delegations/outbox; the sketch adds one `mailbox/deliver` hook.
 
 ### Business-model precedent read (candid)
 
-- The model — one-time setup + recurring managed fee, customer keeps the infra — has
-  working precedent: **Cloudron €15–25/mo with "we do not have access to your server"**,
-  **Dokploy Agency white-label**, **Elestio BYOVM**, xCloud/SpinupWP. Not a speculative
-  shape; people pay for it today.
-- **Nobody bundles the full package** (identity + forge + IDE + catalog + mirror).
-  The differentiation is real — but every individual piece is commoditized, so the moat
-  is the integration and the atproto identity story, not any one component.
+- The shape has working precedent: **Cloudron €15–25/mo with "we do not have access to
+  your server"**, **Dokploy Agency white-label**, **Elestio BYOVM**, xCloud/SpinupWP.
+  The thin-vendor framing is *more* capital-efficient than any of them: no hosted
+  control plane to operate, nothing proprietary on the box, and **disconnect works by
+  construction** (stop billing, stop firing scripts) rather than by policy. Cloudron's
+  trust slogan is literally our architecture.
+- **Support-ticket economics are agent-to-agent triage, not human ops.** The managed
+  fee buys our support crow agents talking to their crow agents over the mesh —
+  diagnose, fix, deploy — so the marginal cost of a ticket trends toward compute, not
+  headcount. That is the margin story. Candid caveat: no precedent found for managed
+  hosting whose support staff is agents; the grant model (deny-by-default, audited,
+  revocable) is the trust product, and a human fallback path is probably needed early.
+- **Nobody bundles the full package** (identity + forge + IDE + catalog + mirror +
+  agent support). Every individual piece is commoditized; the moat is the integration,
+  the atproto identity story, and the support mesh.
 - **GitHub's free public-repo CI is a real subsidy barrier.** Compete on ownership,
   private workloads, and agent-native workflows — not on free OSS CI.
 - Tangled is funded ($4.5M, Dohmke + Pennarun angels) with no revenue path yet: a fine
-  substrate, a risky dependency. And the knot master key is a custody liability we'd
-  inherit — design the backup/escrow story before selling it.
+  substrate, a risky dependency. With the customer-side control plane, the knot
+  master-key custody sits with the customer by construction — our job is the
+  backup/escrow UX in the setup script, and disconnect means they keep the keys.
 
 ### Unverified / flagged
 
