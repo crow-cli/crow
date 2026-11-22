@@ -16,10 +16,30 @@
      Fix: only hash when the endpoint contains `{{uuid}}`; otherwise use
      `targetWindow.origin` as the encoded origin. NOTE: the placeholder MUST be
      non-empty — `_registerMessageHandler` bails on `!this._encodedWebviewOrigin`.
-- HARD browser limit (NOT fixable in crow): service workers require a secure context.
-  Over plain http on a LAN IP / 0.0.0.0, `navigator.serviceWorker` is undefined and
-  webviews throw "Service Workers are not enabled". Use HTTPS or localhost (SSH tunnel).
-  localhost IS a secure context even over http.
+- Service workers need a secure context, so over plain http LAN `navigator.serviceWorker`
+  is undefined. This IS worked around (no HTTPS/tunnel needed) by
+  `09-insecure-origin-webviews.patch`: auto `disableServiceWorker` when `!isSecureContext`,
+  `asWebviewUri` emits same-origin `/vscode-webview-resource/<scheme>+<auth>/<path>` URLs,
+  `pre/index.html toContentHtml` rewrites CDN URLs to that route (covers the Node ext host,
+  which can't know the browser origin), and the server serves the route (cookie-gated).
+  Full write-up: `packages/crow-gui/docs/serve-web-plain-http.md`.
+- CSP SCRIPT HASH GOTCHA: `pre/index.html` pins its inline bootstrap `<script>` with a
+  sha256 in its own CSP meta (`script-src 'sha256-...'`). ANY edit to that script changes
+  its bytes → hash mismatch → browser blocks the WHOLE shell → blank webview (console:
+  "Executing inline script violates ... script-src"). Recompute sha256(base64) over the
+  exact text between `<script async type="module">` and `</script>` and update the meta.
+  Patch 07 and 09 both refresh it. Current: wzIKuV49WQvk2/v8AOcjCox0QTBJLFjNWkj0seKclcM=.
+- pre/index.html is a COPIED static asset: editing it mid-build can miss the asset-copy
+  step (old file gets packaged). Edit before building, or re-copy into the out* trees.
+- LAN backend proxy (vscode-acp): the per-window ACP/MCP proxy must bind 0.0.0.0 in Web
+  (`extension.ts` uiKind) and is token-gated (`?tkn=<uuid>`, backend.ts verifyClient +
+  mcp.ts authorize). chat/vscode.tsx rewrites a loopback endpoint host to location.hostname
+  on http(s) pages. Desktop (vscode-webview:// origin) keeps loopback, ungated.
+- SPAWN MODE: crow-cli evaluates os.getcwd() at import; the ext host's inherited cwd can be
+  a deleted dir → daemon crashes instantly → loop mislabels it "no free port". Fix:
+  backend.ts spawnDaemon passes `cwd: os.homedir()` and reports daemon-failure accurately.
+- Workspace Trust: Restricted Mode disables the workspace-kind crow-acp extension entirely
+  (blank/missing chat). A folder must be Trusted; trust is per-browser (client-side) in web.
 
 ## Tooling gotcha — chrome-headless-shell lies about postMessage
 - Playwright's default `chromium_headless_shell` (old headless) reports

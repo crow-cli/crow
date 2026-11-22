@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as net from "node:net";
+import * as os from "node:os";
 import { watchPid, pidForPort, type PidWatcher } from "./pidfd.js";
 import { attachMcp } from "./mcp.js";
 import * as http from "node:http";
@@ -29,6 +31,10 @@ export type BackendOptions = {
    * webview that owns the session (or a freshly opened editor pane) instead
    * of the headless control connection — every delegated turn is on screen. */
   clientBridge?: ClientBridge;
+  /** Interface the ACP/MCP proxy listens on. Defaults to loopback. Set to
+   * "0.0.0.0" when the chat webview runs on another machine (serve-web); the
+   * proxy then requires its capability token on every request. */
+  listenHost?: string;
 };
 
 export type ClientBridge = {
@@ -173,6 +179,7 @@ export class Backend {
   private wss?: WebSocketServer;
   private httpServer?: http.Server;
   private proxyPort?: number;
+  private readonly proxyToken = randomUUID();
   private controlConn?: Conn;
   private controlStarting?: Promise<Conn>;
   private starting?: Promise<string>;
@@ -196,12 +203,17 @@ export class Backend {
 
   constructor(private readonly opts: BackendOptions) {}
 
+  /** True when the proxy is exposed beyond loopback and gated by token. */
+  private get gated(): boolean {
+    return this.opts.listenHost != null && this.opts.listenHost !== "127.0.0.1";
+  }
+
   get endpoint(): string | undefined {
-    return this.proxyPort ? `ws://127.0.0.1:${this.proxyPort}/acp` : undefined;
+    return this.proxyPort ? `ws://127.0.0.1:${this.proxyPort}/acp${this.gated ? `?tkn=${this.proxyToken}` : ""}` : undefined;
   }
 
   get mcpEndpoint(): string | undefined {
-    return this.proxyPort ? `http://127.0.0.1:${this.proxyPort}/mcp` : undefined;
+    return this.proxyPort ? `http://127.0.0.1:${this.proxyPort}/mcp${this.gated ? `?tkn=${this.proxyToken}` : ""}` : undefined;
   }
 
   start(): Promise<string> {
@@ -245,11 +257,17 @@ export class Backend {
       }
     }
     const httpServer = http.createServer();
-    attachMcp(httpServer, this);
-    const wss = new WebSocketServer({ server: httpServer, path: "/acp" });
+    const tokenOk = (url: string | undefined) =>
+      new URL(url ?? "/", "http://proxy").searchParams.get("tkn") === this.proxyToken;
+    attachMcp(httpServer, this, "/mcp", this.gated ? (req) => tokenOk(req.url) : undefined);
+    const wss = new WebSocketServer({
+      server: httpServer,
+      path: "/acp",
+      verifyClient: this.gated ? (info: { req: http.IncomingMessage }) => tokenOk(info.req.url) : undefined,
+    });
     await new Promise<void>((resolve, reject) => {
       httpServer.once("error", reject);
-      httpServer.listen(0, "127.0.0.1", resolve);
+      httpServer.listen(0, this.opts.listenHost ?? "127.0.0.1", resolve);
     });
     this.httpServer = httpServer;
     this.wss = wss;
@@ -267,14 +285,19 @@ export class Backend {
     const [cmd, ...prefix] = this.opts.cliCommand;
     if (!cmd) throw new Error("cliCommand is empty");
     const last = this.opts.firstPort + PORT_ATTEMPTS - 1;
+    let freePorts = 0;
     for (let port = this.opts.firstPort; port <= last; port++) {
       if (this.disposed) throw new Error("backend disposed during startup");
       if (!(await portFree(port))) {
         this.log(`port ${port} busy, trying next`);
         continue;
       }
+      freePorts++;
       const argv = [...prefix, "acp2", "--http", "--host", "127.0.0.1", "--port", String(port), ...(this.opts.extraArgs ?? [])];
-      const child = spawn(cmd, argv, { stdio: ["ignore", "pipe", "pipe"] });
+      // The extension host's cwd can be a since-deleted directory; crow-cli evaluates
+      // os.getcwd() at import and would crash with FileNotFoundError. Spawn in a
+      // directory that always exists (session cwds are passed separately over ACP).
+      const child = spawn(cmd, argv, { stdio: ["ignore", "pipe", "pipe"], cwd: os.homedir() });
       let spawnError: Error | undefined;
       child.once("error", (err) => { spawnError = err; });
       child.stdout!.on("data", (d) => this.log(`[daemon] ${d.toString().trimEnd()}`));
@@ -297,7 +320,9 @@ export class Backend {
       this.log(`daemon pid ${child.pid} on port ${port}`);
       return `ws://127.0.0.1:${port}/acp`;
     }
-    throw new Error(`no free port for the crow daemon in ${this.opts.firstPort}..${last}`);
+    throw new Error(freePorts === 0
+      ? `no free port for the crow daemon in ${this.opts.firstPort}..${last}`
+      : `crow daemon failed to start on any of ${freePorts} free port(s) in ${this.opts.firstPort}..${last} — see the daemon errors above`);
   }
 
   private onExternalDeath(): void {

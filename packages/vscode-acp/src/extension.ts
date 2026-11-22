@@ -151,6 +151,9 @@ export function activate(context: vscode.ExtensionContext) {
     external: startupConfig.get<string>("backend") === "external" ? startupConfig.get<string>("endpoint") : undefined,
     extraArgs: startupConfig.get<string>("model") ? ["--model", startupConfig.get<string>("model")!] : undefined,
     clientBridge,
+    // serve-web: the webview runs in the user's browser, not on this machine —
+    // the proxy must be reachable over the network (token-gated in Backend).
+    listenHost: vscode.env.uiKind === vscode.UIKind.Web ? "0.0.0.0" : undefined,
   });
   function render(webview: vscode.Webview, host: "editor" | "sidebar") {
     const config = vscode.workspace.getConfiguration("crowAcp");
