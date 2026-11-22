@@ -1,0 +1,33 @@
+diff --git a/src/vs/workbench/contrib/webview/browser/webviewElement.ts b/src/vs/workbench/contrib/webview/browser/webviewElement.ts
+--- a/src/vs/workbench/contrib/webview/browser/webviewElement.ts
++++ b/src/vs/workbench/contrib/webview/browser/webviewElement.ts
+@@ -477,7 +477,11 @@ export class WebviewElement extends Disposable implements IWebviewElement, Webvi
+ 		}
+
+ 		this._windowId = targetWindow.vscodeWindowId;
+-		this._encodedWebviewOriginPromise = parentOriginHash(targetWindow.origin, this.origin).then(id => this._encodedWebviewOrigin = id);
++		// crow: self-hosted webviews are same-origin and use no {{uuid}} subdomain, so the
++		// parentOriginHash (which needs crypto.subtle, i.e. a secure context) is unnecessary.
++		// Only compute it for uuid-subdomain endpoints; otherwise webviews fail on http LAN hosts.
++		const needsOriginHash = this._environmentService.webviewExternalEndpoint.includes('{{uuid}}');
++		this._encodedWebviewOriginPromise = (needsOriginHash ? parentOriginHash(targetWindow.origin, this.origin) : Promise.resolve(targetWindow.origin)).then(id => this._encodedWebviewOrigin = id);
+ 		this._encodedWebviewOriginPromise.then(encodedWebviewOrigin => {
+ 			if (!this._disposed) {
+ 				this._initElement(encodedWebviewOrigin, this.extension, this._options, targetWindow);
+diff --git a/src/vs/server/node/remoteExtensionHostAgentServer.ts b/src/vs/server/node/remoteExtensionHostAgentServer.ts
+--- a/src/vs/server/node/remoteExtensionHostAgentServer.ts
++++ b/src/vs/server/node/remoteExtensionHostAgentServer.ts
+@@ -159,7 +159,12 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
+ 			return void res.end('OK');
+ 		}
+
+-		if (!httpRequestHasValidConnectionToken(this._connectionToken, req, parsedUrl.searchParams)) {
++		// crow: self-hosted webviews (webClientServer webviewEndpoint) serve their shell from
++		// /static/.../webview/browser/pre/. These are public static assets (upstream serves them
++		// unauthenticated from the CDN). The service-worker script is fetched as a module worker,
++		// which omits the connection-token cookie, so gating it 403s and breaks every webview.
++		const isSelfHostedWebviewShell = pathname.startsWith('/static/') && pathname.includes('/out/vs/workbench/contrib/webview/browser/pre/');
++		if (!isSelfHostedWebviewShell && !httpRequestHasValidConnectionToken(this._connectionToken, req, parsedUrl.searchParams)) {
+ 			// invalid connection token
+ 			return serveError(req, res, 403, `Forbidden.`);
+ 		}
