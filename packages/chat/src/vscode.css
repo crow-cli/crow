@@ -32,7 +32,11 @@ body { padding: 0; }
   color: var(--foreground);
   background: var(--background);
   font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
+  /* Message bodies inherit this root size. Base it on the EDITOR font size,
+     not the workbench UI size: the conversation then reads at the same
+     baseline as the code and follows editor font-size changes, while the
+     rest of the IDE keeps its own (smaller) UI size. */
+  font-size: var(--vscode-editor-font-size);
 }
 button:focus-visible, textarea:focus-visible, input:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
