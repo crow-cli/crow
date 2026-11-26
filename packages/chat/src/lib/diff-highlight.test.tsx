@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DiffViewer } from "@/components/ui/diff-viewer";
 import { highlightLine, languageFromPath } from "@/lib/syntax-highlighter";
+import PrismAsyncLight from "react-syntax-highlighter/dist/esm/prism-async-light";
 
 const PY_PATCH = `--- a/foo.py
 +++ b/foo.py
@@ -83,5 +84,31 @@ describe("DiffViewer syntax highlighting", () => {
 `;
     const html = renderToStaticMarkup(<DiffViewer patch={patch} language="python" />);
     expect(html).toContain("var(--code-keyword)");
+  });
+});
+
+// The markdown fences (reasoning AND output, sidebar AND editor) all render
+// through PrismAsyncLight. On session/load the whole transcript paints in one
+// commit; if the Prism core only starts loading at the first fence's mount,
+// that first paint is plain and only colorizes a tick later. Preloading at
+// module evaluation closes that window. This hunts the regression where the
+// generator load is deferred to mount (astGeneratorPromise still null here).
+type AsyncInternals = {
+  astGeneratorPromise: Promise<void> | null;
+  astGenerator: unknown;
+  isRegistered(language: string): boolean;
+};
+const prism = PrismAsyncLight as unknown as AsyncInternals;
+
+describe("markdown fence highlighter readiness (session/load parity)", () => {
+  test("the Prism core load is started at import, before any fence mounts", () => {
+    expect(prism.astGeneratorPromise).not.toBeNull();
+  });
+
+  test("once settled, the generator is ready and fence languages are registered", async () => {
+    await prism.astGeneratorPromise;
+    expect(prism.astGenerator).toBeTruthy();
+    expect(prism.isRegistered("python")).toBe(true);
+    expect(prism.isRegistered("bash")).toBe(true);
   });
 });

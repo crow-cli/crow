@@ -1,4 +1,5 @@
 import { describe, test, expect, mock, afterEach } from "bun:test";
+import { join } from "node:path";
 
 /**
  * Editor-pane chats are TABS: several may be open at once, each its own
@@ -182,7 +183,10 @@ afterEach(() => {
 
 function boot() {
   const subscriptions: any[] = [];
-  activate({ extensionUri: uri("/ext/crow-acp"), subscriptions } as any);
+  // Point at the real package so render() reads the actual dist/webview bundle
+  // (the cache-bust hash stats chat.js/chat.css); a fake path has no files.
+  const pkgRoot = join(import.meta.dir, "..", "..");
+  activate({ extensionUri: uri(pkgRoot), subscriptions } as any);
   cleanups.push(() => { for (const s of subscriptions) s.dispose?.(); });
   const open = () => commands.get("crowAcp.open")!();
   return { open, subscriptions };
@@ -198,6 +202,24 @@ describe("editor-pane chats", () => {
     expect(new Set(panels.map((p) => p.webview)).size).toBe(3);
     // None of them was a mere reveal of an earlier pane.
     expect(panels.every((p) => p.reveals === 0)).toBe(true);
+  });
+
+  test("webview bundle URLs are cache-busted by content (no stale service-worker bundle)", async () => {
+    const { open } = boot();
+    open();
+    // The first paint is "Starting Crow backend…"; once the (external) backend
+    // binds its proxy, renderAll repaints with the real bundle HTML.
+    let html = "";
+    for (let i = 0; i < 100 && !html.includes("chat.js"); i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      html = panels[0].webview.html as string;
+    }
+    // A stable chat.js URL lets the service worker serve an old bundle to one
+    // pane while another paints the new one; the ?v=<content hash> prevents it.
+    const js = /src="([^"]*chat\.js[^"]*)"/.exec(html)?.[1];
+    const css = /href="([^"]*chat\.css[^"]*)"/.exec(html)?.[1];
+    expect(js).toMatch(/\?v=[0-9a-f]{12}$/);
+    expect(css).toMatch(/\?v=[0-9a-f]{12}$/);
   });
 
   test("editor title controls act on the ACTIVE tab, not the first one", () => {

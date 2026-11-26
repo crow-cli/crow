@@ -41,6 +41,14 @@ PrismAsyncLight.registerLanguage("diff", diff);
 PrismAsyncLight.registerLanguage("toml", toml);
 PrismAsyncLight.registerLanguage("sql", sql);
 
+// Kick the Prism core load at module evaluation, not at the first fence's
+// componentDidMount. A restored session (session/load) paints its whole
+// transcript in one commit; a cold highlighter would otherwise render every
+// fence plain on that first paint and only colorize a tick later when the
+// async generator resolves. Preloading means the generator is ready before
+// React mounts, so restored and streaming fences highlight identically.
+(PrismAsyncLight as unknown as { preload(): Promise<void> }).preload();
+
 // A second, synchronous refractor instance for per-line diff highlighting.
 // The language modules above are refractor syntax functions, so the same
 // grammars serve both the async markdown fences and the diff lines.

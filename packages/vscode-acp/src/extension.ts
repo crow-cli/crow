@@ -1,5 +1,28 @@
 import * as vscode from "vscode";
+import { createHash } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
 import { Backend, type ClientBridge } from "./backend.js";
+
+/**
+ * A short content hash for a webview asset. The webview's service worker caches
+ * resources by URL, and `chat.js`/`chat.css` keep stable names across rebuilds —
+ * so without a content-derived query a rebuilt bundle can be served stale (one
+ * pane paints the new bundle, another an old one). Hashing the bytes makes the
+ * URL change exactly when the bundle changes, independent of the version string.
+ */
+export function assetCacheKey(content: Uint8Array | string): string {
+  return createHash("sha256").update(content).digest("hex").slice(0, 12);
+}
+
+const assetKeyCache = new Map<string, { mtimeMs: number; size: number; key: string }>();
+function assetVersion(fsPath: string): string {
+  const st = statSync(fsPath);
+  const hit = assetKeyCache.get(fsPath);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.key;
+  const key = assetCacheKey(readFileSync(fsPath));
+  assetKeyCache.set(fsPath, { mtimeMs: st.mtimeMs, size: st.size, key });
+  return key;
+}
 
 type SessionRow = { id: string; title?: string; updatedAt?: string; isRunning: boolean };
 type SessionState = { rows: SessionRow[]; activeId?: string; canDelete: boolean };
@@ -188,6 +211,10 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
     const uri = (file: string) => webview.asWebviewUri(vscode.Uri.joinPath(root, file));
+    // Cache-bust the bundle by content so a rebuild is never served stale from
+    // the webview service worker (the base href stays a clean directory URI).
+    const asset = (file: string) =>
+      `${uri(file)}?v=${assetVersion(vscode.Uri.joinPath(root, file).fsPath)}`;
     const settings = JSON.stringify({
       host,
       endpoint,
@@ -202,10 +229,10 @@ export function activate(context: vscode.ExtensionContext) {
 <html><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource} data:; img-src ${webview.cspSource} data: blob:; connect-src ws: wss:;">
-<base href="${uri("")}/"><link rel="stylesheet" href="${uri("chat.css")}">
+<base href="${uri("")}/"><link rel="stylesheet" href="${asset("chat.css")}">
 <title>Crow ACP Chat</title></head><body>
 <script id="crow-acp-settings" type="application/json">${settings}</script>
-<div id="root"></div><script nonce="${nonce}" type="module" src="${uri("chat.js")}"></script>
+<div id="root"></div><script nonce="${nonce}" type="module" src="${asset("chat.js")}"></script>
 </body></html>`;
   }
   function configure(owner: vscode.WebviewPanel | vscode.WebviewView, host: "editor" | "sidebar") {
