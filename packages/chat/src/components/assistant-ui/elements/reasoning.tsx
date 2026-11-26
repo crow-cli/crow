@@ -179,7 +179,7 @@ function ReasoningTrigger({
     <CollapsibleTrigger
       data-slot="reasoning-trigger"
       className={cn(
-        "aui-reasoning-trigger group/trigger text-muted-foreground hover:text-foreground flex max-w-[75%] origin-left items-center gap-2 py-1.5 text-[0.9rem] transition-[color,scale] active:scale-[0.98]",
+        "aui-reasoning-trigger group/trigger text-muted-foreground hover:text-foreground flex max-w-[75%] origin-left items-center gap-2 py-1.5 text-base transition-[color,scale] active:scale-[0.98]",
         className,
       )}
       {...props}
@@ -200,7 +200,7 @@ function ReasoningTrigger({
       {preview ? (
         <span
           data-slot="reasoning-trigger-preview"
-          className="text-muted-foreground min-w-0 flex-1 truncate text-start text-[0.85rem] group-data-open/trigger:hidden"
+          className="text-muted-foreground min-w-0 flex-1 truncate text-start text-base group-data-open/trigger:hidden"
         >
           {preview}
         </span>
@@ -230,7 +230,7 @@ function ReasoningContent({
     <CollapsibleContent
       data-slot="reasoning-content"
       className={cn(
-        "aui-reasoning-content text-muted-foreground relative overflow-hidden text-[0.9rem] outline-none",
+        "aui-reasoning-content text-muted-foreground relative overflow-hidden text-base outline-none",
         "group/collapsible-content ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:animate-none",
         "data-closed:animate-collapsible-up",
         "data-open:animate-collapsible-down",
