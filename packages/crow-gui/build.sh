@@ -135,6 +135,18 @@ export SHOULD_BUILD_REH="${REH}"
 export SHOULD_BUILD_REH_WEB="${REH_WEB}"
 export MAX_OLD_SPACE_SIZE="${MAX_OLD_SPACE_SIZE:-8192}"
 
+# Cap build parallelism so a full IDE build neither OOMs nor starves the
+# desktop. esbuild (the bundle + minify gulp tasks) is a Go program that
+# saturates every core; GOMAXPROCS sizes its worker pool and is the dominant
+# memory/CPU lever, since minify feeds it every file at once. cargo reads
+# CARGO_BUILD_JOBS. Default: a third of the cores (floor 1); CROW_BUILD_JOBS
+# overrides. Slower, but the machine stays usable while it builds.
+NPROC="$(nproc 2>/dev/null || echo 4)"
+CROW_BUILD_JOBS="${CROW_BUILD_JOBS:-$(( NPROC / 3 > 0 ? NPROC / 3 : 1 ))}"
+export GOMAXPROCS="${GOMAXPROCS:-${CROW_BUILD_JOBS}}"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-${CROW_BUILD_JOBS}}"
+echo "crow-gui: build parallelism ${CROW_BUILD_JOBS} jobs (nproc=${NPROC}; CROW_BUILD_JOBS overrides)"
+
 # The pinned VS Code commit is a ~340MB fetch from GitHub. Seed it from a local
 # clone instead when one has the commit: CROW_VSCODE_SRC=<path> forces a source,
 # otherwise a sibling vscode/ checkout in the workspace is used if it matches.
