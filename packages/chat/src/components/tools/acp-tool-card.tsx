@@ -219,7 +219,7 @@ function TerminalBody({ detail }: { detail: ExecuteDetail }) {
   return (
     <div
       data-slot="acp-tool-terminal"
-      className="bg-muted/40 border-foreground/10 overflow-hidden rounded-md border font-mono text-xs"
+      className="bg-muted/40 border-foreground/10 overflow-hidden rounded-md border font-mono text-[0.9rem]"
     >
       {command && (
         <div
@@ -330,7 +330,7 @@ function RawBody({
   return (
     <pre
       data-slot="acp-tool-raw"
-      className="bg-muted/40 border-foreground/10 max-h-96 overflow-auto rounded-md border p-2 font-mono text-[11px] select-text whitespace-pre-wrap"
+      className="bg-muted/40 border-foreground/10 max-h-96 overflow-auto rounded-md border p-2 font-mono text-[0.9rem] select-text whitespace-pre-wrap"
     >
       {JSON.stringify(payload, null, 2)}
     </pre>
@@ -406,19 +406,19 @@ const AcpToolCardImpl: ToolCallMessagePartComponent = (props) => {
           setPeek(true);
           setOpen(true);
         }}
-        className="text-muted-foreground hover:text-foreground flex w-full min-w-0 items-center gap-2 rounded py-0.5 ps-1 text-start text-xs transition-colors"
+        className="text-muted-foreground hover:text-foreground flex w-full min-w-0 items-center gap-2 rounded py-0.5 ps-1 text-start text-[0.9rem] transition-colors"
       >
         <Icon className="size-3.5 shrink-0" aria-hidden />
         <span
           className={cn(
             "shrink-0",
-            kind === "execute" && "font-mono text-[11px]",
+            kind === "execute" && "font-mono text-[0.9rem]",
           )}
         >
           {label}
         </span>
         {args && (
-          <span className="truncate font-mono text-[11px] opacity-70">
+          <span className="truncate font-mono text-[0.9rem] opacity-70">
             {args}
           </span>
         )}
@@ -456,8 +456,8 @@ const AcpToolCardImpl: ToolCallMessagePartComponent = (props) => {
         <span
           data-slot="acp-tool-title"
           className={cn(
-            "text-foreground min-w-0 flex-1 truncate text-sm",
-            kind === "execute" && "font-mono text-xs",
+            "text-foreground min-w-0 flex-1 truncate text-[0.95rem]",
+            kind === "execute" && "font-mono text-[0.9rem]",
           )}
         >
           {title}

@@ -42,7 +42,7 @@ export const collapsePanel =
 
 export const live = "text-blue-500 dark:text-blue-400";
 
-export const mono = "font-mono text-[11px] tracking-tight";
+export const mono = "font-mono text-[0.85rem] tracking-tight";
 
 export function ShimmerLabel({
   active = true,
