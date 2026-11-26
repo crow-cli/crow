@@ -112,9 +112,13 @@ export async function handleMcp(backend: McpBackend, msg: any): Promise<RpcReply
 /** MCP Streamable HTTP on an existing http.Server (the proxy's). POST carries
  * JSON-RPC; initialize mints the Mcp-Session-Id every later request must bear.
  * GET/DELETE (server-initiated streams, session teardown) are not offered. */
-export function attachMcp(server: http.Server, backend: McpBackend, path = "/mcp"): void {
+export function attachMcp(server: http.Server, backend: McpBackend, path = "/mcp", authorize?: (req: http.IncomingMessage) => boolean): void {
   const sessions = new Set<string>();
   server.on("request", (req, res) => {
+    if (authorize && !authorize(req)) {
+      res.writeHead(403).end();
+      return;
+    }
     if ((req.url ?? "").split("?")[0] !== path) {
       res.writeHead(404).end();
       return;

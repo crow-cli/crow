@@ -1,0 +1,125 @@
+diff --git a/src/vs/workbench/contrib/webview/common/webview.ts b/src/vs/workbench/contrib/webview/common/webview.ts
+--- a/src/vs/workbench/contrib/webview/common/webview.ts
++++ b/src/vs/workbench/contrib/webview/common/webview.ts
+@@ -50,6 +50,22 @@
+ 		});
+ 	}
+ 
++	// crow: insecure origins (e.g. plain http on a LAN) have no service worker, so the
++	// vscode-cdn.net resource URL below could never be intercepted. Emit a same-origin,
++	// path-preserving URL that the server serves directly instead (see the
++	// /vscode-webview-resource route in remoteExtensionHostAgentServer). `isSecureContext`
++	// is false in both the workbench window and the ext host worker there; in node it is
++	// undefined and this branch is skipped.
++	if (typeof isSecureContext === 'boolean' && !isSecureContext && typeof location !== 'undefined') {
++		return URI.from({
++			scheme: location.protocol === 'https:' ? Schemas.https : Schemas.http,
++			authority: location.host,
++			path: `/vscode-webview-resource/${resource.scheme}+${encodeAuthority(resource.authority)}${resource.path}`,
++			fragment: resource.fragment,
++			query: resource.query,
++		});
++	}
++
+ 	return URI.from({
+ 		scheme: Schemas.https,
+ 		authority: `${resource.scheme}+${encodeAuthority(resource.authority)}.${webviewRootResourceAuthority}`,
+diff --git a/src/vs/workbench/contrib/webview/browser/webviewElement.ts b/src/vs/workbench/contrib/webview/browser/webviewElement.ts
+--- a/src/vs/workbench/contrib/webview/browser/webviewElement.ts
++++ b/src/vs/workbench/contrib/webview/browser/webviewElement.ts
+@@ -450,7 +450,9 @@
+ 			parentOrigin: targetWindow.origin,
+ 		};
+ 
+-		if (this._options.disableServiceWorker) {
++		// crow: on insecure origins (plain http LAN) service workers are unavailable;
++		// run webviews in no-service-worker mode with direct same-origin resource loading.
++		if (this._options.disableServiceWorker || (typeof isSecureContext === 'boolean' && !isSecureContext)) {
+ 			params.disableServiceWorker = 'true';
+ 		}
+ 
+diff --git a/src/vs/server/node/remoteExtensionHostAgentServer.ts b/src/vs/server/node/remoteExtensionHostAgentServer.ts
+--- a/src/vs/server/node/remoteExtensionHostAgentServer.ts
++++ b/src/vs/server/node/remoteExtensionHostAgentServer.ts
+@@ -169,14 +169,33 @@
+ 			return serveError(req, res, 403, `Forbidden.`);
+ 		}
+ 
+-		if (pathname === '/vscode-remote-resource') {
++		if (pathname === '/vscode-remote-resource' || pathname.startsWith('/vscode-webview-resource/')) {
+ 			// Handle HTTP requests for resources rendered in the rich client (images, fonts, etc.)
+ 			// These resources could be files shipped with extensions or even workspace files.
+-			const desiredPaths = parsedUrl.searchParams.getAll('path');
+-			if (desiredPaths.length !== 1) {
+-				return serveError(req, res, 400, `Bad request.`);
+-			}
+-			const desiredPath = desiredPaths[0];
++			let desiredPath: string;
++			if (pathname === '/vscode-remote-resource') {
++				const desiredPaths = parsedUrl.searchParams.getAll('path');
++				if (desiredPaths.length !== 1) {
++					return serveError(req, res, 400, `Bad request.`);
++				}
++				desiredPath = desiredPaths[0];
++			} else {
++				// crow: webview resources on insecure origins (plain http). Service workers
++				// are unavailable there, so asWebviewUri emits same-origin URLs of the form
++				// /vscode-webview-resource/<scheme>+<encoded-authority>/<path> instead of
++				// vscode-cdn.net URLs that only a service worker could intercept. The path
++				// structure is preserved so relative subresource loads resolve correctly.
++				const resourcePath = pathname.substring('/vscode-webview-resource/'.length);
++				const authorityEnd = resourcePath.indexOf('/');
++				if (authorityEnd < 0) {
++					return serveError(req, res, 400, `Bad request.`);
++				}
++				try {
++					desiredPath = '/' + decodeURIComponent(resourcePath.substring(authorityEnd + 1));
++				} catch (err) {
++					return serveError(req, res, 400, `Bad request.`);
++				}
++			}
+ 
+ 			let filePath: string;
+ 			try {
+diff --git a/src/vs/workbench/contrib/webview/browser/pre/index.html b/src/vs/workbench/contrib/webview/browser/pre/index.html
+--- a/src/vs/workbench/contrib/webview/browser/pre/index.html
++++ b/src/vs/workbench/contrib/webview/browser/pre/index.html
+@@ -5,7 +5,7 @@
+ 	<meta charset="UTF-8">
+ 
+ 	<meta http-equiv="Content-Security-Policy"
+-		content="default-src 'none'; script-src 'sha256-0LzQ4cRpjRVgGWaJx5hL6WOVeCbyLPJH+qaLa30s9Ak=' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
++		content="default-src 'none'; script-src 'sha256-wzIKuV49WQvk2/v8AOcjCox0QTBJLFjNWkj0seKclcM=' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
+ 
+ 	<!-- Disable pinch zooming -->
+ 	<meta name="viewport"
+@@ -856,6 +856,29 @@
+ 			const text = data.contents;
+ 			const newDocument = new DOMParser().parseFromString(text, 'text/html');
+ 
++			// crow: no-service-worker mode (insecure origins, e.g. plain http on a LAN).
++			// vscode-cdn.net resource URLs can only be intercepted by a service worker,
++			// so point them at the server's /vscode-webview-resource route instead, which
++			// serves the same files over plain HTTP. Path structure is preserved so
++			// relative subresource loads (module imports, css urls) resolve correctly.
++			// Extension hosts on the server (node) cannot know the browser origin, so
++			// this rewrite happens here, where the webview HTML lands.
++			if (disableServiceWorker) {
++				const resourceBaseAuthority = (searchParams.get('vscode-resource-base-authority') || 'vscode-resource.vscode-cdn.net').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++				const resourceUrl = new RegExp('https://([^/"\'\\s*]+)\\.' + resourceBaseAuthority + '(?=[/"\'\\s)<>]|$)', 'g');
++				const rewrite = (value) => value.replace(resourceUrl, (_m, authority) => `${location.origin}/vscode-webview-resource/${authority}`);
++				for (const el of Array.from(newDocument.querySelectorAll('*'))) {
++					for (const attr of Array.from(el.attributes)) {
++						if (attr.value.includes('vscode-cdn.net')) {
++							el.setAttribute(attr.name, rewrite(attr.value));
++						}
++					}
++					if (el.tagName === 'STYLE' && el.textContent && el.textContent.includes('vscode-cdn.net')) {
++						el.textContent = rewrite(el.textContent);
++					}
++				}
++			}
++
+ 			newDocument.querySelectorAll('a').forEach(a => {
+ 				if (!a.title) {
+ 					const href = a.getAttribute('href');

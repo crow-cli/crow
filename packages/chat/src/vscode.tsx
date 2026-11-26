@@ -21,6 +21,12 @@ const settings = JSON.parse(document.getElementById("crow-acp-settings")!.textCo
   mcpEndpoint?: string;
   attach?: { requestId: string; sessionId?: string };
 };
+// serve-web: the backend proxy runs on the server, not the browser's machine.
+// On http(s) pages (self-hosted web) dial it via the host that served the page;
+// desktop webviews keep loopback (their origin is vscode-webview://).
+const endpoint = /^https?:$/.test(location.protocol)
+  ? settings.endpoint.replace(/^(wss?:\/\/)(?:127\.0\.0\.1|localhost|\[::1\])(?=[:/])/, `$1${location.hostname}`)
+  : settings.endpoint;
 const mcp = parseMcpConfig(settings.mcpConfig);
 // The backend's coordination tools ride the proxy's own port, which is minted
 // per window — the extension hands it over so no static config can know it.
@@ -181,7 +187,7 @@ function App() {
   if (mcp.error) return <p role="alert">Invalid MCP configuration: {mcp.error}</p>;
   return (
     <div className={`${dark ? "dark" : ""} h-full`}>
-      <ChatSession url={settings.endpoint} cwd={settings.cwd} mcpServers={mcpServers} protocol={settings.protocol === "auto" ? "auto" : Number(settings.protocol) as 1 | 2}>
+      <ChatSession url={endpoint} cwd={settings.cwd} mcpServers={mcpServers} protocol={settings.protocol === "auto" ? "auto" : Number(settings.protocol) as 1 | 2}>
         {(error) => (
           <>
             <main aria-label="Crow ACP Chat" data-host={settings.host} className="crow-chat-layout flex h-full min-h-0 min-w-0 flex-col">
