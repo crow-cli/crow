@@ -103,13 +103,29 @@ export function activate(context: vscode.ExtensionContext) {
     }
     return fallback;
   }
-  function openChatPane(attach: { requestId: string; sessionId?: string }): void {
-    const pane = vscode.window.createWebviewPanel("crowAcp.chat", "Crow ACP Chat", vscode.ViewColumn.Beside, {
+  function openChatPane(attach: { requestId: string; sessionId?: string }, column: vscode.ViewColumn = vscode.ViewColumn.Beside): void {
+    const pane = vscode.window.createWebviewPanel("crowAcp.chat", "Crow ACP Chat", column, {
       retainContextWhenHidden: true,
     });
     panelAttach.set(pane.webview, attach);
     configure(pane, "editor");
   }
+  /** A fresh editor chat on a brand-new session (no attach), in the given group. */
+  function newChatPane(column: vscode.ViewColumn): void {
+    const pane = vscode.window.createWebviewPanel("crowAcp.chat", "Crow ACP Chat", column, {
+      retainContextWhenHidden: true,
+    });
+    configure(pane, "editor");
+  }
+  // Native "Split Editor" on a chat webview cannot copy the tab (webview inputs
+  // are singletons), so the workbench opens an EMPTY group instead. Detect that
+  // and fill the new group with a fresh chat on a new session. We track whether
+  // the previously-active group's active tab was a chat so we only react to a
+  // split that originated from a chat, not to any unrelated empty group.
+  const isChatTab = (tab: vscode.Tab | undefined) =>
+    tab?.input instanceof vscode.TabInputWebview &&
+    (tab.input.viewType === "crowAcp.chat" || tab.input.viewType === "mainThreadWebview-crowAcp.chat");
+  let prevActiveWasChat = false;
   const clientBridge: ClientBridge = {
     attach(sessionId) {
       const requestId = nextRequestId();
@@ -372,13 +388,11 @@ export function activate(context: vscode.ExtensionContext) {
       // flow switches the new client to that thread on mount); without one,
       // open a fresh pane on whatever the runtime restores.
       if (sessionId) {
-        openChatPane({ requestId: nextRequestId(), sessionId });
+        // Move-to-editor: insert into the active group, not a new split.
+        openChatPane({ requestId: nextRequestId(), sessionId }, vscode.ViewColumn.Active);
         return;
       }
-      const pane = vscode.window.createWebviewPanel("crowAcp.chat", "Crow ACP Chat", vscode.ViewColumn.Beside, {
-        retainContextWhenHidden: true,
-      });
-      configure(pane, "editor");
+      newChatPane(vscode.ViewColumn.Beside);
     }),
     // The sidebar's "move to editor" button: open an editor pane on the
     // session the sidebar is currently showing.
@@ -386,6 +400,25 @@ export function activate(context: vscode.ExtensionContext) {
       const sidebar = sidebarWebview();
       const sessionId = sidebar ? webviews.get(sidebar)?.sessions.activeId : undefined;
       void vscode.commands.executeCommand("crowAcp.open", sessionId);
+    }),
+    // Active-TAB changes fire onDidChangeTabs; active-GROUP opens fire
+    // onDidChangeTabGroups. Track the active chat on both so the split handler
+    // below knows the split originated from a chat tab.
+    vscode.window.tabGroups.onDidChangeTabs(() => {
+      prevActiveWasChat = isChatTab(vscode.window.tabGroups.activeTabGroup?.activeTab);
+    }),
+    vscode.window.tabGroups.onDidChangeTabGroups((event) => {
+      if (prevActiveWasChat) {
+        for (const group of event.opened) {
+          if (group.tabs.length === 0) {
+            // Attach with no sessionId => the client starts a NEW thread on
+            // mount (a plain pane would restore the last active session).
+            openChatPane({ requestId: nextRequestId() }, group.viewColumn);
+            break;
+          }
+        }
+      }
+      prevActiveWasChat = isChatTab(vscode.window.tabGroups.activeTabGroup?.activeTab);
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("crowAcp")) renderAll();

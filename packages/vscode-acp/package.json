@@ -96,14 +96,9 @@
           "group": "navigation@2"
         },
         {
-          "command": "crowAcp.editor.collapseAll",
-          "when": "activeWebviewPanelId == 'crowAcp.chat'",
-          "group": "navigation@3"
-        },
-        {
           "command": "crowAcp.editor.settings",
           "when": "activeWebviewPanelId == 'crowAcp.chat'",
-          "group": "navigation@4"
+          "group": "navigation@3"
         }
       ],
       "view/title": [
