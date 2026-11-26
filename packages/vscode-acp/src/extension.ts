@@ -58,7 +58,6 @@ export function activate(context: vscode.ExtensionContext) {
   const output = vscode.window.createOutputChannel("Crow ACP");
   const startupConfig = vscode.workspace.getConfiguration("crowAcp");
   let backendError: string | undefined;
-  let panel: vscode.WebviewPanel | undefined;
   type ChatEntry = { host: "editor" | "sidebar"; cleanup: vscode.Disposable; sessions: SessionState; panel?: vscode.WebviewPanel };
   const webviews = new Map<vscode.Webview, ChatEntry>();
   /** The active editor chat tab: the editor/title controls sit above it, so
@@ -108,7 +107,6 @@ export function activate(context: vscode.ExtensionContext) {
     const pane = vscode.window.createWebviewPanel("crowAcp.chat", "Crow ACP Chat", vscode.ViewColumn.Beside, {
       retainContextWhenHidden: true,
     });
-    panel = pane;
     panelAttach.set(pane.webview, attach);
     configure(pane, "editor");
   }
@@ -248,7 +246,6 @@ export function activate(context: vscode.ExtensionContext) {
       }
     });
     const disposal = owner.onDidDispose(() => {
-      if (host === "editor") panel = undefined;
       cleanup.dispose();
     });
     const cleanup = new vscode.Disposable(() => {
@@ -361,12 +358,15 @@ export function activate(context: vscode.ExtensionContext) {
       if (webview) webviews.get(webview)?.panel?.reveal();
       else void vscode.commands.executeCommand("crowAcp.open");
     }),
+    // Every invocation opens a NEW editor pane: chats are tabs, and several
+    // may be open at once, each its own client. The webviews map tracks them
+    // all; activeEditorChat (view-state tracked) is the one the title controls
+    // act on. A singleton here would reveal the first pane forever.
     vscode.commands.registerCommand("crowAcp.open", () => {
-      if (panel) { panel.reveal(); activeEditorChat = panel.webview; return; }
-      panel = vscode.window.createWebviewPanel("crowAcp.chat", "Crow ACP Chat", vscode.ViewColumn.Beside, {
+      const pane = vscode.window.createWebviewPanel("crowAcp.chat", "Crow ACP Chat", vscode.ViewColumn.Beside, {
         retainContextWhenHidden: true,
       });
-      configure(panel, "editor");
+      configure(pane, "editor");
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("crowAcp")) renderAll();
@@ -374,7 +374,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.workspace.onDidChangeWorkspaceFolders(renderAll),
     sessionsChanged,
     { dispose: () => {
-      panel?.dispose();
+      for (const { panel } of [...webviews.values()]) panel?.dispose();
       for (const { cleanup } of webviews.values()) cleanup.dispose();
     } },
   );
