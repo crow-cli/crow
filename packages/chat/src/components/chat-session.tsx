@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
+import { useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { useAcpRuntime, useAcpSessionId, type AcpMcpServer, type UseAcpRuntimeOptions } from "@assistant-ui/acp";
-import { AssistantRuntimeProvider, useAssistantDataUI, useAui } from "@assistant-ui/react";
-import { retainComposerFocus } from "@/lib/composer-focus";
+import { AssistantRuntimeProvider, useAssistantDataUI } from "@assistant-ui/react";
 import { Thread, type ThreadComponents } from "@/components/assistant-ui/elements/thread.aui";
 import { CollapseAwareReasoningGroup } from "@/components/collapse-aware-reasoning";
 import { COMPACTION_DATA_UI } from "@/components/compaction-card";
@@ -20,14 +19,6 @@ export function ChatThread({ composerStatus }: { composerStatus?: ComponentType 
   // Compaction rides the thread as a named `data` part, which assistant-ui only
   // draws once a renderer is registered for that name.
   useAssistantDataUI(COMPACTION_DATA_UI);
-  const aui = useAui();
-  // Long runs can blur the webview to <body>; keep the empty composer usable.
-  useEffect(() => retainComposerFocus({
-    doc: document,
-    win: window,
-    isRunning: () => aui.thread.getState().isRunning,
-    composer: () => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message input"]'),
-  }), [aui]);
   const components = useMemo<ThreadComponents>(
     () => (composerStatus ? { ...THREAD_COMPONENTS, ComposerStatus: composerStatus } : THREAD_COMPONENTS),
     [composerStatus],
