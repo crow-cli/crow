@@ -60,8 +60,59 @@ const config: Record<string, unknown> = {
 
 const uri = (fsPath: string) => ({ fsPath, toString: () => fsPath });
 
+// -- minimal tab-group host -------------------------------------------------
+// Models enough of window.tabGroups for the extension's split/move logic:
+// active group/tab tracking, group opens, and the workbench's native split
+// (which skips singleton webview inputs and therefore opens an EMPTY group).
+class TabInputWebview { constructor(public viewType: string) {} }
+const ViewColumn = { Active: -1, Beside: -2, One: 1, Two: 2 };
+type HostTab = { input: TabInputWebview; isActive: boolean };
+type HostGroup = { viewColumn: number; tabs: HostTab[]; isActive: boolean };
+const groups: HostGroup[] = [];
+const panelColumns: number[] = [];
+const tabGroupListeners: Listener[] = [];
+const tabListeners: Listener[] = [];
+let nextColumn = 1;
+const activeGroup = () => groups.find((g) => g.isActive);
+const fireTabGroups = (e: any) => { for (const cb of [...tabGroupListeners]) cb(e); };
+const fireTabs = (e: any) => { for (const cb of [...tabListeners]) cb(e); };
+const groupApi = (g: HostGroup) => ({
+  viewColumn: g.viewColumn, tabs: g.tabs, isActive: g.isActive,
+  get activeTab() { return g.tabs.find((t) => t.isActive); },
+});
+function createGroup(viewColumn: number): HostGroup {
+  const g: HostGroup = { viewColumn, tabs: [], isActive: false };
+  groups.push(g);
+  return g;
+}
+function openTab(group: HostGroup, viewType: string) {
+  const tab: HostTab = { input: new TabInputWebview("mainThreadWebview-" + viewType), isActive: true };
+  for (const t of group.tabs) t.isActive = false;
+  group.tabs.push(tab);
+  for (const g of groups) g.isActive = g === group;
+  fireTabs({ opened: [tab], closed: [], changed: [] });
+  fireTabGroups({ opened: [], closed: [], changed: [groupApi(group)] });
+}
+/** The workbench's native split of the active group: webview inputs are
+    singletons, so the copy is skipped and an EMPTY group appears. */
+function splitActiveGroup(): HostGroup {
+  const src = activeGroup();
+  const g = createGroup(nextColumn++);
+  for (const x of groups) x.isActive = x === g;
+  fireTabGroups({ opened: [groupApi(g)], closed: [], changed: src ? [groupApi(src)] : [] });
+  return g;
+}
+const tick = () => new Promise((r) => setTimeout(r, 10));
+const settingsOf = (panel: any) => {
+  const m = /<script id="crow-acp-settings" type="application\/json">([\s\S]*?)<\/script>/.exec(panel.webview.html);
+  return m ? JSON.parse(m[1].replace(/\\u003c/g, "<")) : null;
+};
+
 mock.module("vscode", () => ({
-  ViewColumn: { Beside: 2 },
+  ViewColumn,
+  UIKind: { Desktop: 1, Web: 2 },
+  env: { uiKind: 1 },
+  TabInputWebview,
   QuickPickItemKind: { Separator: -1 },
   ThemeIcon: class { constructor(public id: string) {} },
   Disposable: class { constructor(private fn: () => void) {} dispose() { this.fn(); } },
@@ -75,17 +126,33 @@ mock.module("vscode", () => ({
   window: {
     activeTextEditor: undefined,
     createOutputChannel: () => ({ appendLine: () => {}, show: () => {}, dispose: () => {} }),
-    createWebviewPanel: (viewType: string, title: string) => {
+    createWebviewPanel: (viewType: string, title: string, column: number) => {
       const panel = makePanel(viewType, title);
       panels.push(panel);
+      panelColumns.push(column);
+      let group: HostGroup;
+      let isNew = false;
+      if (column === ViewColumn.Active) { group = activeGroup() ?? createGroup(nextColumn++); isNew = !activeGroup(); }
+      else if (column === ViewColumn.Beside) { group = createGroup(nextColumn++); isNew = true; }
+      else { group = groups.find((g) => g.viewColumn === column) ?? createGroup(column); isNew = !groups.includes(group); }
+      openTab(group, viewType);
+      if (isNew) fireTabGroups({ opened: [groupApi(group)], closed: [], changed: [] });
       return panel;
     },
     registerWebviewViewProvider: () => disposable(),
     createQuickPick: () => { throw new Error("quick pick not expected in this test"); },
+    showWarningMessage: async () => undefined,
+    tabGroups: {
+      get activeTabGroup() { const g = activeGroup(); return g ? groupApi(g) : undefined; },
+      get all() { return groups.map(groupApi); },
+      onDidChangeTabGroups: (cb: Listener) => { tabGroupListeners.push(cb); return disposable(() => { const i = tabGroupListeners.indexOf(cb); if (i >= 0) tabGroupListeners.splice(i, 1); }); },
+      onDidChangeTabs: (cb: Listener) => { tabListeners.push(cb); return disposable(() => { const i = tabListeners.indexOf(cb); if (i >= 0) tabListeners.splice(i, 1); }); },
+    },
   },
   workspace: {
     workspaceFolders: undefined,
     getConfiguration: () => ({ get: (key: string) => config[key] }),
+    getWorkspaceFolder: () => undefined,
     onDidChangeConfiguration: () => disposable(),
     onDidChangeWorkspaceFolders: () => disposable(),
   },
@@ -106,6 +173,11 @@ afterEach(() => {
   cleanups.length = 0;
   panels.length = 0;
   commands.clear();
+  groups.length = 0;
+  panelColumns.length = 0;
+  tabGroupListeners.length = 0;
+  tabListeners.length = 0;
+  nextColumn = 1;
 });
 
 function boot() {
@@ -160,5 +232,42 @@ describe("editor-pane chats", () => {
     open();
     expect(panels.length).toBe(3);
     expect(panels[2].disposed).toBe(false);
+  });
+
+  test("move-to-editor inserts into the active group, not a new split", async () => {
+    const { open } = boot();
+    open();
+    await tick();
+    const before = groups.length;
+    commands.get("crowAcp.open")!("sess-1");
+    await tick();
+    expect(groups.length).toBe(before);
+    expect(panelColumns[panelColumns.length - 1]).toBe(ViewColumn.Active);
+    const s = settingsOf(panels[panels.length - 1]);
+    expect(s.attach.sessionId).toBe("sess-1");
+  });
+
+  test("native split on a chat fills the empty group with a NEW session", async () => {
+    const { open } = boot();
+    open();
+    await tick();
+    const g2 = splitActiveGroup();
+    await tick();
+    expect(g2.tabs.length).toBe(1);
+    const s = settingsOf(panels[panels.length - 1]);
+    expect(s.attach).toBeTruthy();
+    expect(s.attach.sessionId).toBeUndefined();
+  });
+
+  test("splitting a non-chat group does not spawn a chat", async () => {
+    boot();
+    const g = createGroup(nextColumn++);
+    g.tabs.push({ input: { uri: "file:///x" } as any, isActive: true });
+    for (const x of groups) x.isActive = x === g;
+    fireTabs({ opened: [], closed: [], changed: [] });
+    const g2 = splitActiveGroup();
+    await tick();
+    expect(g2.tabs.length).toBe(0);
+    expect(panels.length).toBe(0);
   });
 });
