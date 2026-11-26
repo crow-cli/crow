@@ -32,6 +32,11 @@
         "title": "Crow ACP: Open Sidebar"
       },
       {
+        "command": "crowAcp.moveToEditor",
+        "title": "Move to Editor",
+        "icon": "$(arrow-right)"
+      },
+      {
         "command": "crowAcp.session.new",
         "title": "New Session",
         "icon": "$(add)"
@@ -113,7 +118,7 @@
           "group": "navigation@2"
         },
         {
-          "command": "crowAcp.collapseAll",
+          "command": "crowAcp.moveToEditor",
           "when": "view == crowAcp.sidebar",
           "group": "navigation@3"
         },

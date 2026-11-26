@@ -210,12 +210,14 @@ export function activate(context: vscode.ExtensionContext) {
       if (payload.type === "settings") {
         void vscode.commands.executeCommand("workbench.action.openSettings", "@ext:crow-ai.crow-acp");
       } else if (payload.type === "prompt-attached" && typeof payload.requestId === "string" && typeof payload.sessionId === "string") {
+        // Consume the pending attach regardless of a delegation waiter: a
+        // "move to editor" pane attaches with no waiter awaiting it.
+        panelAttach.delete(webview);
         const waiter = attachWaiters.get(payload.requestId);
         if (waiter) {
           clearTimeout(waiter.timer);
           attachWaiters.delete(payload.requestId);
           attachedClients.set(payload.sessionId, webview);
-          panelAttach.delete(webview);
           waiter.resolve(payload.sessionId);
         }
       } else if (payload.type === "prompt-attach-failed" && typeof payload.requestId === "string") {
@@ -365,11 +367,25 @@ export function activate(context: vscode.ExtensionContext) {
     // may be open at once, each its own client. The webviews map tracks them
     // all; activeEditorChat (view-state tracked) is the one the title controls
     // act on. A singleton here would reveal the first pane forever.
-    vscode.commands.registerCommand("crowAcp.open", () => {
+    vscode.commands.registerCommand("crowAcp.open", (sessionId?: string) => {
+      // With a session id, open the pane already attached to it (the attach
+      // flow switches the new client to that thread on mount); without one,
+      // open a fresh pane on whatever the runtime restores.
+      if (sessionId) {
+        openChatPane({ requestId: nextRequestId(), sessionId });
+        return;
+      }
       const pane = vscode.window.createWebviewPanel("crowAcp.chat", "Crow ACP Chat", vscode.ViewColumn.Beside, {
         retainContextWhenHidden: true,
       });
       configure(pane, "editor");
+    }),
+    // The sidebar's "move to editor" button: open an editor pane on the
+    // session the sidebar is currently showing.
+    vscode.commands.registerCommand("crowAcp.moveToEditor", () => {
+      const sidebar = sidebarWebview();
+      const sessionId = sidebar ? webviews.get(sidebar)?.sessions.activeId : undefined;
+      void vscode.commands.executeCommand("crowAcp.open", sessionId);
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("crowAcp")) renderAll();
