@@ -1,7 +1,15 @@
 "use client";
 
-import type { FC } from "react";
-import { PrismAsyncLight } from "react-syntax-highlighter";
+import { Fragment, type FC, type ReactNode } from "react";
+// Type-only bare import: loads @types' ambient declarations for the deep
+// ESM paths below (the package itself ships no per-file .d.ts).
+import type {} from "react-syntax-highlighter";
+import PrismAsyncLight from "react-syntax-highlighter/dist/esm/prism-async-light";
+import { refractor } from "refractor/core";
+import rust from "refractor/rust";
+import css from "refractor/css";
+import markup from "refractor/markup";
+import markdown from "refractor/markdown";
 import type { SyntaxHighlighterProps } from "@assistant-ui/react-markdown";
 import bash from "react-syntax-highlighter/dist/esm/languages/prism/bash";
 import diff from "react-syntax-highlighter/dist/esm/languages/prism/diff";
@@ -13,6 +21,7 @@ import toml from "react-syntax-highlighter/dist/esm/languages/prism/toml";
 import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx";
 import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
 import yaml from "react-syntax-highlighter/dist/esm/languages/prism/yaml";
+import javascript from "react-syntax-highlighter/dist/esm/languages/prism/javascript";
 
 import { cn } from "@/lib/utils";
 
@@ -25,10 +34,35 @@ PrismAsyncLight.registerLanguage("typescript", typescript);
 PrismAsyncLight.registerLanguage("ts", typescript);
 PrismAsyncLight.registerLanguage("tsx", tsx);
 PrismAsyncLight.registerLanguage("jsx", jsx);
+PrismAsyncLight.registerLanguage("javascript", javascript);
+PrismAsyncLight.registerLanguage("js", javascript);
 PrismAsyncLight.registerLanguage("yaml", yaml);
 PrismAsyncLight.registerLanguage("diff", diff);
 PrismAsyncLight.registerLanguage("toml", toml);
 PrismAsyncLight.registerLanguage("sql", sql);
+
+// A second, synchronous refractor instance for per-line diff highlighting.
+// The language modules above are refractor syntax functions, so the same
+// grammars serve both the async markdown fences and the diff lines.
+for (const syntax of [bash, json, javascript, jsx, python, sql, toml, tsx, typescript, yaml, rust, css, markup, markdown]) {
+  refractor.register(syntax);
+}
+
+const EXT_LANGUAGE: Record<string, string> = {
+  py: "python", pyi: "python",
+  ts: "typescript", mts: "typescript", cts: "typescript", tsx: "tsx",
+  js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "jsx",
+  rs: "rust", json: "json", yaml: "yaml", yml: "yaml", toml: "toml",
+  sql: "sql", sh: "bash", bash: "bash", zsh: "bash",
+  css: "css", html: "markup", xml: "markup", svg: "markup",
+  md: "markdown",
+};
+
+/** The highlighter language for a file path, from its extension. */
+export function languageFromPath(path: string | undefined): string | undefined {
+  const ext = path?.split(".").pop()?.toLowerCase();
+  return ext ? EXT_LANGUAGE[ext] : undefined;
+}
 
 // Token colours ride the theme's CSS variables, so light/dark/macchiato
 // each get their own palette without a second highlighter tree.
@@ -117,3 +151,42 @@ export const ToolCodeBlock: FC<{
     />
   </div>
 );
+
+type HastNode = {
+  type: string;
+  value?: string;
+  properties?: { className?: string[] };
+  children?: HastNode[];
+};
+
+const tokenStyle = (className: string[] | undefined) => {
+  let style: Record<string, string> | undefined;
+  for (const cls of className ?? []) {
+    const t = CODE_THEME[cls];
+    if (t) style = { ...style, ...t };
+  }
+  return style;
+};
+
+const renderHast = (nodes: HastNode[]): ReactNode =>
+  nodes.map((node, i) => {
+    if (node.type === "text") return node.value;
+    const children = renderHast(node.children ?? []);
+    const style = tokenStyle(node.properties?.className);
+    return style ? (
+      <span key={i} style={style}>{children}</span>
+    ) : (
+      <Fragment key={i}>{children}</Fragment>
+    );
+  });
+
+/**
+ * One diff line, tokenized synchronously with the same palette as the
+ * markdown fences. Untokenized text keeps the surrounding add/del color;
+ * an unknown language or extension renders the line plain.
+ */
+export function highlightLine(code: string, language: string | undefined): ReactNode {
+  if (!language || !refractor.registered(language)) return code;
+  const tree = refractor.highlight(code, language) as unknown as HastNode;
+  return renderHast(tree.children ?? []);
+}

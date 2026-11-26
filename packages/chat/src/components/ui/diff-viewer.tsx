@@ -8,6 +8,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import parseDiff from "parse-diff";
 
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { highlightLine, languageFromPath } from "@/lib/syntax-highlighter";
 import { cn } from "@/lib/utils";
 
 type DiffLineType = "add" | "del" | "normal" | "marker";
@@ -385,14 +386,20 @@ function DiffViewerHeader({
 interface DiffViewerLineProps extends ComponentProps<"div"> {
   line: ParsedLine;
   showLineNumbers?: boolean | undefined;
+  language?: string | undefined;
 }
 
 function DiffViewerLine({
   line,
   showLineNumbers = true,
+  language,
   className,
   ...props
 }: DiffViewerLineProps) {
+  const highlighted = useMemo(
+    () => (line.type === "marker" ? line.content : highlightLine(line.content, language)),
+    [line.content, line.type, language],
+  );
   const indicator =
     line.type === "add"
       ? "+"
@@ -436,7 +443,7 @@ function DiffViewerLine({
         data-slot="diff-viewer-content"
         className="flex-1 pe-3.5 break-all whitespace-pre-wrap"
       >
-        {line.content}
+        {highlighted}
       </span>
     </div>
   );
@@ -445,15 +452,25 @@ function DiffViewerLine({
 interface DiffViewerSplitLineProps extends ComponentProps<"div"> {
   pair: SplitLinePair;
   showLineNumbers?: boolean | undefined;
+  language?: string | undefined;
 }
 
 function DiffViewerSplitLine({
   pair,
   showLineNumbers = true,
+  language,
   className,
   ...props
 }: DiffViewerSplitLineProps) {
   const { left, right } = pair;
+  const highlightedLeft = useMemo(
+    () => (left && left.type !== "marker" ? highlightLine(left.content, language) : (left?.content ?? "")),
+    [left, language],
+  );
+  const highlightedRight = useMemo(
+    () => (right && right.type !== "marker" ? highlightLine(right.content, language) : (right?.content ?? "")),
+    [right, language],
+  );
 
   return (
     <div
@@ -489,7 +506,7 @@ function DiffViewerSplitLine({
             : ""}
         </span>
         <span className="flex-1 pe-3.5 break-all whitespace-pre-wrap">
-          {left?.content ?? ""}
+          {highlightedLeft}
         </span>
       </div>
       <div
@@ -520,7 +537,7 @@ function DiffViewerSplitLine({
             : ""}
         </span>
         <span className="flex-1 pe-3.5 break-all whitespace-pre-wrap">
-          {right?.content ?? ""}
+          {highlightedRight}
         </span>
       </div>
     </div>
@@ -536,6 +553,7 @@ interface DiffViewerFileContentProps {
   showStats: boolean;
   copyable: boolean;
   maxCollapsedLines: number | undefined;
+  language: string | undefined;
 }
 
 function DiffViewerFileContent({
@@ -547,6 +565,7 @@ function DiffViewerFileContent({
   showStats,
   copyable,
   maxCollapsedLines,
+  language,
 }: DiffViewerFileContentProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentId = useId();
@@ -580,6 +599,7 @@ function DiffViewerFileContent({
                   key={pairIndex}
                   pair={pair}
                   showLineNumbers={showLineNumbers}
+                  language={language}
                 />
               ))
           : file.lines
@@ -589,6 +609,7 @@ function DiffViewerFileContent({
                   key={lineIndex}
                   line={line}
                   showLineNumbers={showLineNumbers}
+                  language={language}
                 />
               ))}
       </DiffViewerContent>
@@ -620,6 +641,8 @@ export type DiffViewerProps = Partial<SyntaxHighlighterProps> &
     showStats?: boolean | undefined;
     copyable?: boolean | undefined;
     maxCollapsedLines?: number | undefined;
+    /** Highlighter language; defaults to the file extension of the diff's names. */
+    language?: string | undefined;
     className?: string | undefined;
   };
 
@@ -634,6 +657,7 @@ function DiffViewer({
   showStats = true,
   copyable = true,
   maxCollapsedLines,
+  language,
   variant,
   size,
   className,
@@ -705,6 +729,7 @@ function DiffViewer({
           showStats={showStats}
           copyable={copyable}
           maxCollapsedLines={maxCollapsedLines}
+          language={language ?? languageFromPath(file.newName ?? file.oldName)}
         />
       ))}
     </div>
