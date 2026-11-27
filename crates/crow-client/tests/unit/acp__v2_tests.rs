@@ -327,3 +327,45 @@ fn both_user_echo_spellings_are_recognised() {
     assert!(!is_user_echo(&json!({ "sessionUpdate": "agent_thought_chunk" })));
     assert!(!is_user_echo(&json!({})), "no discriminator is not an echo");
 }
+
+
+#[test]
+fn error_stop_reason_bare_word_and_structured_object_both_read_as_error() {
+    // alpha.7 sends the bare word; beta.4 may carry a JSON-RPC error object.
+    // Both land on the Error arm and read as "error", never "unknown".
+    assert_eq!(kind_of(json!({ "stopReason": "error" })), "error");
+    assert_eq!(
+        kind_of(json!({ "stopReason": "error", "error": { "code": -32000, "message": "boom" } })),
+        "error"
+    );
+}
+
+#[test]
+fn unknown_and_future_states_parse_without_settling_a_turn() {
+    // The turn board only settles on Idle. Unknown (the spec's "can't tell"
+    // state) and any future/custom state must parse and NOT read as idle, or a
+    // heartbeat would end a turn that is still running.
+    for state in ["unknown", "paused", "background", "_vendor_state", "some_future_state"] {
+        let parsed: v2::SessionUpdate = serde_json::from_value(json!({
+            "sessionUpdate": "state_update", "state": state
+        }))
+        .unwrap_or_else(|e| panic!("state {state} must parse: {e}"));
+        assert!(
+            !matches!(parsed, v2::SessionUpdate::StateUpdate(v2::StateUpdate::Idle(_))),
+            "state {state} must not read as idle"
+        );
+    }
+}
+
+#[test]
+fn replay_complete_closes_the_window_so_the_next_prompt_is_live_again() {
+    let mut window = ReplayWindow::default();
+    let echo = json!({ "sessionUpdate": "user_message", "content": [{ "type": "text", "text": "hi" }] });
+    window.begin("s1");
+    assert!(window.forwards(&echo, "s1"), "mid-replay the agent's copy is the only one");
+    let done = json!({ "sessionUpdate": "replay_complete" });
+    assert!(is_replay_complete(&done));
+    assert!(!is_replay_complete(&echo));
+    window.end("s1"); // the handler does this on replay_complete
+    assert!(!window.forwards(&echo, "s1"), "after replay_complete the pane echoes locally again");
+}

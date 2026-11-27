@@ -838,6 +838,27 @@ fn available_plan_command_keeps_its_standard_config_action() {
 }
 
 #[test]
+fn beta4_typed_command_and_alpha7_flat_command_both_populate_the_palette() {
+    // beta.4 wraps a slash command in a `type: "command"` discriminator;
+    // alpha.7 sends the same fields flat (no `type`). The palette reads
+    // name/description raw, so both land identically — the shipping pair is a
+    // beta.4 client talking to an alpha.7 agent.
+    let typed = skills_from_available_commands(&json!([{
+        "type": "command", "name": "plan", "description": "Enter plan mode",
+        "input": { "hint": "on|off" }
+    }]));
+    let flat = skills_from_available_commands(&json!([{
+        "name": "plan", "description": "Enter plan mode", "input": { "hint": "on|off" }
+    }]));
+    assert_eq!(typed.len(), 1);
+    assert_eq!(typed[0].name, "plan");
+    assert_eq!(typed[0].input_hint.as_deref(), Some("on|off"));
+    assert_eq!(flat.len(), 1);
+    assert_eq!(flat[0].name, "plan");
+    assert_eq!(flat[0].description, "Enter plan mode");
+}
+
+#[test]
 fn catalog_prefers_agent_id_and_flattens_groups() {
     let options = json!([
         {"type": "select", "id": "model", "category": "model", "options": [{"value": "acme/m1", "name": "M1"}]},
@@ -1810,6 +1831,27 @@ fn v2_compaction_passes_an_unknown_status_through() {
             status: "_vendor_paused".into(),
             summary: None,
             error: None,
+        }]
+    );
+}
+
+#[test]
+fn compaction_status_null_resets_to_in_progress_and_absent_is_the_unchanged_marker() {
+    // beta.4: `null` resets the status to in_progress; an omitted status leaves
+    // the stored one unchanged. events.rs maps null -> "in_progress" and absent
+    // -> "" (the marker the transcript reads as "keep what is stored").
+    assert_eq!(
+        v2_update("s1", json!({ "sessionUpdate": "compaction_update", "compactionId": "c", "status": null })),
+        vec![UiEvent::Compaction {
+            session: "s1".into(), id: "c".into(),
+            status: "in_progress".into(), summary: None, error: None,
+        }]
+    );
+    assert_eq!(
+        v2_update("s1", json!({ "sessionUpdate": "compaction_update", "compactionId": "c" })),
+        vec![UiEvent::Compaction {
+            session: "s1".into(), id: "c".into(),
+            status: "".into(), summary: None, error: None,
         }]
     );
 }

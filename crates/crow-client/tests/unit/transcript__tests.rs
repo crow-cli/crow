@@ -1493,6 +1493,36 @@ fn a_terminal_summary_patch_replaces_what_streamed() {
 }
 
 #[test]
+fn an_omitted_compaction_status_keeps_the_stored_one_and_a_new_cell_starts_open() {
+    let mut tr = t("s");
+    tr.apply(compact("cmp_1", "in_progress", None, None));
+    // A patch with no status (the empty marker) must not settle the cell.
+    tr.apply(compact("cmp_1", "", Some("streamed"), None));
+    match &tr.cells[0].kind {
+        CellKind::Compaction { status, summary, seconds, .. } => {
+            assert_eq!(*status, CompactionStatus::InProgress, "omitted status is unchanged");
+            assert_eq!(summary, "streamed");
+            assert!(seconds.is_none(), "still open, no duration yet");
+        }
+        other => panic!("expected a compaction, got {other:?}"),
+    }
+    // A value still replaces: settle, then a null-reset (events.rs maps it to
+    // "in_progress") reopens the lifecycle word.
+    tr.apply(compact("cmp_1", "completed", None, None));
+    tr.apply(compact("cmp_1", "in_progress", None, None));
+    match &tr.cells[0].kind {
+        CellKind::Compaction { status, .. } => assert_eq!(*status, CompactionStatus::InProgress),
+        other => panic!("expected a compaction, got {other:?}"),
+    }
+    // A brand-new compaction whose first update omits status starts in_progress.
+    tr.apply(compact("cmp_2", "", None, None));
+    match &tr.cells[1].kind {
+        CellKind::Compaction { status, .. } => assert_eq!(*status, CompactionStatus::InProgress),
+        other => panic!("expected a compaction, got {other:?}"),
+    }
+}
+
+#[test]
 fn the_first_compaction_update_fixes_its_position_in_the_timeline() {
     let mut tr = t("s");
     tr.push_user("first".into(), false);

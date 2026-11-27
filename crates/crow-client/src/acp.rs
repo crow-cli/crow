@@ -1197,6 +1197,22 @@ fn apply_setup(
         if let Some(modes) = value.get("modes") {
             surface.apply_session_modes(modes, bus, session);
         }
+        // beta.4 carries the initial palette in the setup response too. Read it
+        // raw so a typed `command` entry lands; alpha.7's flat commands are
+        // dropped by the SDK's typed response parse (no `type` discriminator)
+        // and arrive via the `available_commands_update` notification instead,
+        // which crow-cli always sends alongside the response.
+        if let Some(commands) = value
+            .get("availableCommands")
+            .or_else(|| value.get("available_commands"))
+        {
+            let skills = skills_from_available_commands(commands);
+            surface.session_mut(session).skills = skills.clone();
+            let _ = bus.send(AppEvent::Ctl(CtlEvent::Skills {
+                session_id: session.map(str::to_string),
+                skills,
+            }));
+        }
     }
 }
 

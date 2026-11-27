@@ -547,7 +547,13 @@ fn parse_session_update(params: &Value) -> Vec<UiEvent> {
             vec![UiEvent::Compaction {
                 session,
                 id,
-                status: str_field(update, "status"),
+                // beta.4 patch semantics: an omitted status leaves the stored
+                // one unchanged (the empty marker below), `null` resets it to
+                // `in_progress`, and a value replaces it.
+                status: match update.get("status") {
+                    Some(Value::Null) => "in_progress".to_string(),
+                    _ => str_field(update, "status"),
+                },
                 // Absent stays `None` (keep what streamed); `null` and `[]`
                 // both concat to "" and read as the explicit clear they are.
                 summary: update.get("summary").map(concat_text_blocks),

@@ -147,6 +147,12 @@ fn is_user_echo(update: &Value) -> bool {
     )
 }
 
+/// beta.4's explicit end-of-replay signal. alpha.7 has no such update; the
+/// resume response closes the window instead. See [`ReplayWindow`].
+fn is_replay_complete(update: &Value) -> bool {
+    update.get("sessionUpdate").and_then(Value::as_str) == Some("replay_complete")
+}
+
 /// v2's stop reasons in the words the UI already knows. `Other` is the
 /// extension arm v1's enum cannot represent, and it keeps the agent's own word
 /// instead of passing for success or collapsing into "unknown".
@@ -822,6 +828,14 @@ pub(super) async fn connect(
                                     session_id: Some(session.clone()),
                                     skills,
                                 }));
+                            }
+                            // beta.4 ends a resume replay with an explicit
+                            // `replay_complete` update; alpha.7 has no such
+                            // update and the resume response closes the window
+                            // instead (see `resume_session`). Both are
+                            // idempotent, so whichever lands first wins.
+                            if is_replay_complete(update) {
+                                replay_lock(&replaying_n).end(&session);
                             }
                         }
                         // Claimed either way: an update this client drops is

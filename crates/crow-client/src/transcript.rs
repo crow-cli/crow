@@ -1310,7 +1310,10 @@ impl Transcript {
                 error,
             } => {
                 self.close_open(&session);
-                let status = CompactionStatus::parse(&status);
+                // beta.4 patch semantics: an omitted status (the empty marker
+                // from events.rs) leaves the stored one unchanged; a present
+                // one replaces it. A brand-new compaction starts in_progress.
+                let parsed = (!status.is_empty()).then(|| CompactionStatus::parse(&status));
                 if let Some(&idx) = self.compactions.get(&id) {
                     if let Some(cell) = self.cells.get_mut(idx) {
                         if let CellKind::Compaction {
@@ -1322,7 +1325,9 @@ impl Transcript {
                             ..
                         } = &mut cell.kind
                         {
-                            *current = status.clone();
+                            if let Some(next) = parsed.clone() {
+                                *current = next;
+                            }
                             // Patch semantics, and the distinction is the whole
                             // feature: an absent `summary` keeps what the chunks
                             // accumulated, a present one replaces it outright.
@@ -1332,7 +1337,7 @@ impl Transcript {
                             if error.is_some() {
                                 *current_error = error;
                             }
-                            if !status.open() && seconds.is_none() {
+                            if !current.open() && seconds.is_none() {
                                 *seconds = Some(started.elapsed().as_secs_f32());
                             }
                         }
@@ -1343,6 +1348,7 @@ impl Transcript {
                     return;
                 }
                 let agent = self.agent_label(&session);
+                let status = parsed.unwrap_or(CompactionStatus::InProgress);
                 let open = status.open();
                 self.cells.push(Cell::new(CellKind::Compaction {
                     status,
