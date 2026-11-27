@@ -14,17 +14,17 @@ Build/gates:
 
 Trajectory: 2 -> 3 -> 4 -> 5 -> 6 (after master phase 1 lands).
 
-- [ ] 2.1 Cargo.toml -> crate 5.6.1; features stdio, process, unstable_protocol_v2, unstable_end_turn_token_usage (+unstable_session_fork if used); drop unstable_session_compaction.
-- [ ] 2.2 schema::v1 -> v1::schema, schema::v2 -> v2::schema across the 8 using files; ProtocolVersion/Error paths.
-- [ ] 2.3 ConnectTo driver -> Option<ConnectionDriver>; AcpAgent config; raw response type if touched.
+- [x] 2.1 DONE 4d96115: crate 5.6.1; features stdio, process, unstable_protocol_v2, unstable_end_turn_token_usage; dropped unstable_session_compaction (fork not called via typed Rust SDK).
+- [x] 2.2 DONE 4d96115: v1::schema/v2::schema; root ErrorCode struct + consts; From<v1::Error> conversions.
+- [x] 2.3 DONE 4d96115: (Channel, Option<ConnectionDriver>); non_exhaustive configs; RawJsonRpcId/RawJsonRpcResponse; raw Builder::new guard-free. Verify: cargo test -j 2 960 passed.
   Verify 2.x: cargo test green, no UX change; commit.
-- [ ] 3.1 AvailableCommand union + flat-alpha.7 tolerance shim; characterization test.
-- [ ] 3.2 replay_complete closes ReplayWindow; response fallback kept; tests.
-- [ ] 3.3 error stopReason string|object -> transcript error; unknown state; tests.
-- [ ] 3.4 setup-response availableCommands; compaction status patch; paused/background tolerance; tests.
-- [ ] 4.1 Vendor beta.4 types.gen.ts (TS SDK v2.12.0); typecheck green; commit.
-- [ ] 4.2 acpThreadState error stopReason -> error status + text; tolerate new updates; tests.
-- [ ] 5.1 crowAcp.server paste-able entry; fallbacks; unit tests; build+typecheck green.
-- [ ] 5.2 Red error bubble + copy top right in chat webview; test + eyeball.
+- [x] 3.1 DONE c60e32b: palette reads name/description raw -> typed command + flat alpha.7 both land; characterization test.
+- [x] 3.2 DONE c60e32b: is_replay_complete closes window; resume-response fallback kept; test.
+- [x] 3.3 DONE c60e32b (Error arm landed in 4d96115): bare word + {error:{...}} -> error; unknown/future states never idle; tests.
+- [x] 3.4 DONE c60e32b: apply_setup reads availableCommands; compaction omitted-unchanged/null->in_progress; paused/background tolerated; tests. Verify: cargo test -j 2 966 passed.
+- [x] 4.1 DONE ba3d8f8.
+- [x] 4.2 DONE ba3d8f8.
+- [x] 5.1 DONE fb23db0.
+- [x] 5.2 DONE c4b8646 (eyeball at Phase 6).
 - [ ] 6.1/6.2 Interop live runs vs sibling worktree; evidence captured.
 - [ ] 6.3 Gates re-run, files marked, commits complete.
