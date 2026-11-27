@@ -15,8 +15,8 @@ files are preserved in git history on main.)
 - [ ] 2.x Rust crate 2.2.0 -> 5.6.1 behavior-preserving migration (features, v1::schema/v2::schema, Option<ConnectionDriver>, Error). Gate: cargo test green.
 - [ ] 3.x beta.4 adoption + alpha.7 tolerance: flat AvailableCommand shim, replay_complete, error stopReason string|object, unknown state, setup-response availableCommands, compaction status patch, paused/background. Gate: characterization tests.
 - [x] 4.x TS vendored v2 types alpha.2 -> beta.4 (@agentclientprotocol/sdk 2.12.0); error stopReason in acpThreadState. Gate: typecheck + acp tests. DONE ba3d8f8: stable beta.4 types.gen.ts (ClientOptions artifact stripped), fork tolerance cast, AcpStopReason+error, reducer lifts 'agent error: …' into status.error on all three settle paths; chat typecheck clean, 110/110 tests (8 new).
-- [ ] 5.1 crowAcp.server paste-able JSON settings entry (spawn|external), old settings fallback, backend keeps owning state + spawning. Gate: unit tests.
-- [ ] 5.2 Red error bubble, copy-click top right, in chat webview. Gate: test + eyeball.
+- [x] 5.1 crowAcp.server paste-able JSON settings entry (spawn|external), old settings fallback, backend keeps owning state + spawning. Gate: unit tests. DONE fb23db0: resolveServerEntry + configError seam; 6 new tests, unit 70/70, build+typecheck green.
+- [x] 5.2 Red error bubble, copy-click top right, in chat webview. Gate: test + eyeball. DONE c4b8646: message-error.aui.tsx; 3 component tests, chat 113/113. Eyeball pending Phase 6.
 - [ ] 6.x Interop gate vs ../crow-cli-v2-preview daemon (alpha.7 agent, beta.4 clients). Gate: observed live runs.
 - [ ] Commits with Session-Id: economic-urchin-of-easy-pleasure.
 
