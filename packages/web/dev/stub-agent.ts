@@ -80,6 +80,11 @@ export type StubAgent = {
    * async task finished, a goal continuation) and streams a mailbox delivery
    * plus its reply, bounded by `state_update` running/idle like any turn. */
   wake(sessionId: string, delivery: string): void;
+  /** Run a turn that crashes: a trailing `agent error: …` text part and an
+   * idle `stopReason: "error"`, the shape crow-cli reports a failed turn in.
+   * The client lifts the text into the message status and renders the red
+   * error bubble. */
+  fail(sessionId: string, message: string): void;
   reset(): void;
   stop(): void;
 };
@@ -252,6 +257,47 @@ export function startStubAgent(options: StubOptions = {}): StubAgent {
       });
     });
     return userMessageId;
+  };
+
+  /** A crashed turn: running, the `agent error: …` text, then idle error. */
+  const runErrorTurn = (
+    ws: ServerWebSocket<Conn>,
+    session: Session,
+    message: string,
+  ): void => {
+    const agentMessageId = `a${++messageSeq}`;
+    const text = `agent error: ${message}`;
+    session.owner = ws;
+    let at = 0;
+    const step = (fn: () => void): void => {
+      const timer = setTimeout(() => {
+        session.timers.delete(timer);
+        fn();
+      }, at);
+      session.timers.add(timer);
+      at += delay;
+    };
+    step(() =>
+      notify(ws, session.sessionId, { sessionUpdate: "state_update", state: "running" }),
+    );
+    for (const piece of chunkText(text, chunkSize)) {
+      step(() =>
+        notify(ws, session.sessionId, {
+          sessionUpdate: "agent_message_chunk",
+          messageId: agentMessageId,
+          content: { type: "text", text: piece },
+        }),
+      );
+    }
+    step(() => {
+      session.transcript.push({ role: "agent", text });
+      session.owner = undefined;
+      notify(ws, session.sessionId, {
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "error",
+      });
+    });
   };
 
   /** The transcript, as notifications, before the `session/resume` answer. */
@@ -495,6 +541,13 @@ export function startStubAgent(options: StubOptions = {}): StubAgent {
       const ws = session.owner ?? [...clients][0];
       if (ws === undefined) throw new Error(`No client connected to wake ${sessionId}`);
       runTurn(ws, session, delivery);
+    },
+    fail: (sessionId, message) => {
+      const session = sessions.get(sessionId);
+      if (session === undefined) throw new Error(`Unknown session: ${sessionId}`);
+      const ws = session.owner ?? [...clients][0];
+      if (ws === undefined) throw new Error(`No client connected to fail ${sessionId}`);
+      runErrorTurn(ws, session, message);
     },
     reset: () => {
       for (const session of sessions.values()) clearTimers(session);

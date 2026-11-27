@@ -164,6 +164,27 @@ describe("the built page, as an ACP client", () => {
     await until(() => page.getByTestId("endpoint").getAttribute("title"), agent.url);
   }, TIMEOUT);
 
+  test("a crashed turn renders the red error bubble with a copy button", async () => {
+    const before = await rows().count();
+    await page.getByTestId("new-thread").click();
+    // Wait for the new session's row before typing: the composer remounts on
+    // the session switch, and a fill that lands mid-remount is cleared.
+    await until(() => rows().count(), before + 1, "the new session row");
+    await prompt("trigger an error");
+    const sid = agent.snapshot().at(-1)!.sessionId;
+    agent.fail(sid, "provider exploded: 404 Model not exist");
+    const bubble = page.locator(".aui-message-error-root");
+    await bubble.waitFor({ timeout: TIMEOUT });
+    expect(await bubble.textContent()).toContain("provider exploded: 404 Model not exist");
+    // The copy button sits top right and copies the full error text.
+    const copy = bubble.getByRole("button", { name: "Copy error" });
+    await copy.waitFor({ timeout: TIMEOUT });
+    const box = await copy.boundingBox();
+    const root = await bubble.boundingBox();
+    expect(box && root && box.y - root.y < 12 && root.x + root.width - (box.x + box.width) < 12).toBe(true);
+    await page.screenshot({ path: "/tmp/error_bubble.png" });
+  }, TIMEOUT);
+
   test("the page ran without a console error", () => {
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);

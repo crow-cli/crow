@@ -26,5 +26,5 @@ Trajectory: 2 -> 3 -> 4 -> 5 -> 6 (after master phase 1 lands).
 - [x] 4.2 DONE ba3d8f8.
 - [x] 5.1 DONE fb23db0.
 - [x] 5.2 DONE c4b8646 (eyeball at Phase 6).
-- [ ] 6.1/6.2 Interop live runs vs sibling worktree; evidence captured.
-- [ ] 6.3 Gates re-run, files marked, commits complete.
+- [x] 6.1/6.2 DONE: beta.4 client <-> alpha.7 agent wire proof (/tmp/interop_wire.jsonl) + real crow-agent TUI PTY spawn of worktree crow-cli acp2 (/tmp/tui_pane.txt PONG). Web e2e error bubble green 7/7 x3, /tmp/error_bubble.png red bubble + copy top right (light+dark).
+- [x] 6.3 DONE: gates re-run, files marked, commits complete.
