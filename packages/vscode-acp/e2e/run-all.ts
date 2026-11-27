@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 // (--without-connection-token --reconnection-grace-time 0) with a hermetic
 // workspace and source-spawned daemons on qwen4-max. Start the server first
 // (see PLAN.md); each suite is independent and order-free.
-const SUITES = ["sidebar-controls", "editor-sessions", "delegation-panes", "ide-smoke", "scroll-to-bottom"];
+const SUITES = ["sidebar-controls", "editor-sessions", "delegation-panes", "ide-smoke", "scroll-to-bottom", "error-bubble"];
 const probe = await fetch("http://127.0.0.1:8088/").catch(() => undefined);
 if (!probe) {
   console.error("[e2e] REH server not reachable on 127.0.0.1:8088 — start it first (PLAN.md gate)");

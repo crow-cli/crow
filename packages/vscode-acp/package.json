@@ -79,10 +79,22 @@
     ],
     "menus": {
       "commandPalette": [
-        { "command": "crowAcp.editor.session.new", "when": "false" },
-        { "command": "crowAcp.editor.session.switch", "when": "false" },
-        { "command": "crowAcp.editor.collapseAll", "when": "false" },
-        { "command": "crowAcp.editor.settings", "when": "false" }
+        {
+          "command": "crowAcp.editor.session.new",
+          "when": "false"
+        },
+        {
+          "command": "crowAcp.editor.session.switch",
+          "when": "false"
+        },
+        {
+          "command": "crowAcp.editor.collapseAll",
+          "when": "false"
+        },
+        {
+          "command": "crowAcp.editor.settings",
+          "when": "false"
+        }
       ],
       "editor/title": [
         {
@@ -126,7 +138,11 @@
     },
     "viewsContainers": {
       "activitybar": [
-        { "id": "crowAcp", "title": "Crow", "icon": "media/crow.svg" }
+        {
+          "id": "crowAcp",
+          "title": "Crow",
+          "icon": "media/crow.svg"
+        }
       ]
     },
     "views": {
@@ -154,7 +170,9 @@
         },
         "crowAcp.cliCommand": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": ["crow-cli"],
           "description": "argv that runs crow-cli for the spawned daemon, e.g. [\"uv\", \"--project\", \"/path/to/crow-cli\", \"run\", \"crow-cli\"] to run from a source checkout. Applies on window reload."
         },
@@ -209,12 +227,13 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/ws": "^8.5.0",
-    "vite": "^8.3.2",
-    "@vitejs/plugin-react": "^6.1.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/vscode": "^1.100.0",
+    "@types/ws": "^8.5.0",
+    "@vitejs/plugin-react": "^6.1.1",
     "@vscode/vsce": "^3.7.0",
-    "typescript": "^5.9.3"
+    "playwright": "1.64.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.2"
   }
 }

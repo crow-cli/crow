@@ -3,7 +3,7 @@ import { execSync } from "node:child_process";
 import { WebSocket } from "ws";
 
 const IDE_URL = "http://127.0.0.1:8088/?folder=/tmp/crow-ide-test";
-const browser = await chromium.launch();
+const browser = await chromium.launch({ channel: "chromium" });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 const errors: string[] = [];
 page.on("pageerror", (e) => errors.push(String(e)));
@@ -31,7 +31,8 @@ async function findProxy(frame: Frame): Promise<{ port: number; status: any }> {
     JSON.parse(document.getElementById("crow-acp-settings")!.textContent!));
   const port = Number(new URL(settings.endpoint).port);
   return await new Promise<any>((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/acp`);
+    const u = new URL(settings.endpoint); u.hostname = "127.0.0.1";
+    const ws = new WebSocket(u.toString());
     const timer = setTimeout(() => { ws.terminate(); reject(new Error("backend status timeout")); }, 5000);
     ws.on("open", () => ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "_crow/backend/status" })));
     ws.on("message", (d) => {
