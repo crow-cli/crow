@@ -230,6 +230,43 @@ const runningAssistant = (
 };
 
 /**
+ * crow-cli reports a crashed turn as a trailing `agent error: …` text part
+ * followed by an idle edge with stopReason "error". Lift that text out of the
+ * reply and into the message status so the thread renders the error bubble
+ * instead of plain reply text. A status that already carries an error (a
+ * JSON-RPC prompt rejection) passes through untouched.
+ */
+const AGENT_ERROR_MARKER = "agent error: ";
+const settleErrorStatus = (
+  assistant: AcpAssistantMessage | undefined,
+  status: MessageStatus,
+): {
+  assistant: AcpAssistantMessage | undefined;
+  status: MessageStatus;
+} => {
+  if (
+    !assistant ||
+    status.type !== "incomplete" ||
+    status.reason !== "error" ||
+    status.error !== undefined
+  )
+    return { assistant, status };
+  const last = assistant.content[assistant.content.length - 1];
+  if (last?.type !== "text") return { assistant, status };
+  const marker = last.text.indexOf(AGENT_ERROR_MARKER);
+  if (marker === -1) return { assistant, status };
+  const error = last.text.slice(marker + AGENT_ERROR_MARKER.length);
+  const before = last.text.slice(0, marker);
+  const content = before
+    ? [...assistant.content.slice(0, -1), { ...last, text: before }]
+    : assistant.content.slice(0, -1);
+  return {
+    assistant: { ...assistant, content },
+    status: { ...status, error },
+  };
+};
+
+/**
  * Give an agent-origin run its assistant message, lazily. The run opens on
  * `state_update: running`, but the injected delivery echo (`user_message_chunk`)
  * arrives next and belongs BEFORE the reply — minting on first content lets
@@ -718,9 +755,11 @@ const reduceSessionUpdate = (
         // No prompt promise will settle this run: the reducer does, with the
         // same closing run-end gives a client turn — permissions cancelled,
         // the assistant's status from the stop reason, compactions settled.
-        const status = stopReasonToMessageStatus(update.stopReason ?? "end_turn");
         const next = cancelPermissions(state);
-        const assistant = runningAssistant(next);
+        const { assistant, status } = settleErrorStatus(
+          runningAssistant(next),
+          stopReasonToMessageStatus(update.stopReason ?? "end_turn"),
+        );
         const settled: AcpThreadState = !assistant
           ? { ...next, run: { type: "idle" } }
           : {
@@ -958,18 +997,21 @@ export const reduceAcpThreadState = (
 
     case "run-end": {
       const next = cancelPermissions(state);
-      const assistant = runningAssistant(next);
+      const { assistant, status } = settleErrorStatus(
+        runningAssistant(next),
+        event.status,
+      );
       const idle = !assistant
         ? { ...next, run: { type: "idle" as const } }
         : {
             ...next,
             messagesById: {
               ...next.messagesById,
-              [assistant.id]: { ...assistant, status: event.status },
+              [assistant.id]: { ...assistant, status },
             },
             run: { type: "idle" as const },
           };
-      return settleCompactions(idle, event.status);
+      return settleCompactions(idle, status);
     }
 
     case "run-handoff": {
@@ -978,11 +1020,14 @@ export const reduceAcpThreadState = (
       // watchers of the idle edge (a send queue draining, a scroll lock) see
       // one continuous run rather than a gap between two turns.
       const settled = cancelPermissions(state);
-      const previous = runningAssistant(settled);
+      const { assistant: previous, status } = settleErrorStatus(
+        runningAssistant(settled),
+        event.status,
+      );
       const messagesById = previous
         ? {
             ...settled.messagesById,
-            [previous.id]: { ...previous, status: event.status },
+            [previous.id]: { ...previous, status },
           }
         : settled.messagesById;
       const handedOff = {
@@ -993,7 +1038,7 @@ export const reduceAcpThreadState = (
       };
       // The turn being handed off is over, so a compaction it left open is
       // never getting its terminal update.
-      return settleCompactions(handedOff, event.status);
+      return settleCompactions(handedOff, status);
     }
 
     default:

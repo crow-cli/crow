@@ -91,7 +91,11 @@ function mapAgentCapabilities(
       ? {
           list: {},
           delete: session.delete != null ? {} : undefined,
-          fork: session.fork != null ? {} : undefined,
+          // beta.4 moved `fork` out of the stable schema (into `unstable`),
+          // but alpha.7 agents — crow-cli included — still advertise it.
+          // Tolerate the key so fork keeps working against shipping agents.
+          fork:
+            (session as { fork?: unknown }).fork != null ? {} : undefined,
         }
       : undefined,
   };

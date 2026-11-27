@@ -381,7 +381,8 @@ export type AcpStopReason =
   | "max_tokens"
   | "max_turn_requests"
   | "refusal"
-  | "cancelled";
+  | "cancelled"
+  | "error";
 
 export type AcpPromptCapabilities = {
   readonly image?: boolean;

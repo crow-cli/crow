@@ -224,6 +224,11 @@ export function stopReasonToMessageStatus(
     case "refusal":
     case "max_turn_requests":
       return { type: "incomplete", reason: "other" };
+    case "error":
+      // The error text rides in the assistant's trailing "agent error: …"
+      // part (crow-cli's crash report); the reducer lifts it into the status
+      // so the message renders the error bubble.
+      return { type: "incomplete", reason: "error" };
     default:
       return { type: "complete", reason: "stop" };
   }
