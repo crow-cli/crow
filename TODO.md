@@ -1,48 +1,26 @@
 ## **DO NOT ASK USER FOR FEEDBACK — THIS IS THE USER FEEDBACK.**
 ## **DO NOT ASK USER FOR NEXT STEPS — THESE ARE THE NEXT STEPS.**
 
-# TODO — crow coordination backend (worktree /home/thomas/src/crow-backend, branch acp-backend)
+# TODO — v2-preview sprint (crow side; master in ../crow-cli-v2-preview/TODO.md)
 
-Base committed: 49b833b (backend + prompt/cancel wrappers, 18 unit / 4 integration green, e2e smoke green).
+Worktree /home/thomas/.agents/crow/src/crow-v2-preview, branch v2-preview.
+Master sprint files (full scope, phases 1-6) live in
+/home/thomas/.agents/crow/src/crow-cli-v2-preview/{TODO,PLAN}.md — read them
+first. This file mirrors the crow-side items; mark BOTH when done.
+(The previous coordination-backend sprint recorded here is complete; its
+files are preserved in git history on main.)
 
-## Scope
+## Scope (crow side)
 
-- [x] pidfd process watcher for the daemon (os.pidfd_open validated in Python: pidfd readable ~0.5s after exit, works on non-child processes). Node has no pidfd API — spawn a tiny python3 stdlib helper (os.pidfd_open + select) and watch its exit. Primary consumer: external backend mode, which today has NO death detection (status().daemon is just {external: url}).
-- [x] External-mode daemon identity: resolve listening pid from endpoint port via /proc/net/tcp inode -> /proc/*/fd scan (pure Node fs, no ss dependency).
-- [x] Transcript accumulation in the proxy: per-session assistant text from agent_message_chunk, reset on running; last assistant message available for handoff/delegation results. (Whiteboard: backend owns state — who called who, who is running/idle, who needs prompting when X finishes.) DONE 2026-11-13: unit 30/30 incl. 5 transcript tests (stream B).
-- [x] Coordination MCP served BY the backend over HTTP (Streamable HTTP at /mcp on the proxy's http server): crow_status, crow_prompt (rlm-style delegation: prompt another session, settle on its idle, return its final assistant message), crow_cancel. Same internals as _crow/backend/*.
-- [x] Conductor/worker ping-pong on the backend: loop state (armed conductor+worker sessions, who-called-who, per-turn tool tracking), prompt_worker MCP tool, auto-handoff of worker's last assistant message to conductor on worker idle(end_turn), reprimand prompt when conductor ends a turn without prompt_worker, no iteration ceiling, disarm stops. DONE 2026-11-13: unit 42/42 (6-cycle exact handoff, reprimand, disarm), integration 8/8 on qwen4-max (3 live cycles in 39s).
-- [x] Webview auto-injection of the backend MCP url (discovered scope: the proxy port is per-window, so crowAcp.mcpConfig cannot name it; extension passes mcpEndpoint, chat webview appends the crow-backend http server). Needed for the phase-3 e2e conductor.
-- [x] Tests for all of the above: unit over FakeAgent (deterministic), integration over real source-spawned daemon + qwen4-max, e2e smoke extension for the loop. DONE 2026-11-13: unit 42/42, integration 8/8 (89s), e2e SMOKE PASS (e2e/ide-smoke.ts, stream B authored, stream A verified on phase-3 build).
-- [x] Commit each phase with Session-Id trailer. DONE: 49b833b base, b61b365 phase 1, 7331b32 + 5cee4b3 phase 2, 1a3c1bf phase 3 (+ e2e commit).
+- [ ] 2.x Rust crate 2.2.0 -> 5.6.1 behavior-preserving migration (features, v1::schema/v2::schema, Option<ConnectionDriver>, Error). Gate: cargo test green.
+- [ ] 3.x beta.4 adoption + alpha.7 tolerance: flat AvailableCommand shim, replay_complete, error stopReason string|object, unknown state, setup-response availableCommands, compaction status patch, paused/background. Gate: characterization tests.
+- [x] 4.x TS vendored v2 types alpha.2 -> beta.4 (@agentclientprotocol/sdk 2.12.0); error stopReason in acpThreadState. Gate: typecheck + acp tests. DONE ba3d8f8: stable beta.4 types.gen.ts (ClientOptions artifact stripped), fork tolerance cast, AcpStopReason+error, reducer lifts 'agent error: …' into status.error on all three settle paths; chat typecheck clean, 110/110 tests (8 new).
+- [ ] 5.1 crowAcp.server paste-able JSON settings entry (spawn|external), old settings fallback, backend keeps owning state + spawning. Gate: unit tests.
+- [ ] 5.2 Red error bubble, copy-click top right, in chat webview. Gate: test + eyeball.
+- [ ] 6.x Interop gate vs ../crow-cli-v2-preview daemon (alpha.7 agent, beta.4 clients). Gate: observed live runs.
+- [ ] Commits with Session-Id: economic-urchin-of-easy-pleasure.
 
-## Interpretation note (derived, not asked)
+## Key interop facts
 
-"task/rlm MCP servers through the backend" = delegation tools backed by the backend's own state (crow_prompt/crow_cancel/crow_status + prompt_worker), served from the backend's HTTP endpoint — NOT crow-cli's v1 sqlite task system. mcp2's execute kernel already carries rlm ambient; the backend-side tools are what lets one IDE session drive another through the backend that owns the state.
-
-## Environment facts (e2e)
-
-- Repo-built server: $ROOT/packages/crow-gui/vscodium/vscode-reh-web-linux-x64/bin/crow-server, port 8088, --without-connection-token --reconnection-grace-time 0 (grace flag takes SECONDS; 0 makes reload/disconnect dispose the ext host, which kills the daemon).
-- Workspace /tmp/crow-ide-test, settings: crowAcp.cliCommand = [uv, --project, /home/thomas/.agents/crow/src/crow-cli, run, crow-cli], port 2771.
-- Manual daemon pid 15853 holds 2771 (prior session) -> backend must cycle to 2772.
-- Trust is browser-side: Manage -> getByText("Trust", {exact:true}).
-- Smoke script: packages/vscode-acp/e2e/ide-smoke.ts (stream B; run with `bun e2e/ide-smoke.ts` from packages/vscode-acp). SMOKE PASS on qwen4-max 2026-11-13 20:58.
-- Integration model: qwen4-max (user directive 2026-11-13; crow-cli config resolves credentials, no env key needed; remote, parallel-safe). Never system crow binaries, never Astra.
-
-## Headed coordination (user correction 2026-11-13: delegation must run THROUGH THE VISIBLE CLIENT, never headless)
-
-The original mandate, restated by the user: MCP tools that delegate must run HEADED inside the IDE via the extension — the prompt goes through the frontend chat client, visibly. The headless control-connection path built in phases 2-3 was wrong for the product path (kept only as the test/fallback seam).
-
-- [x] crow_prompt lands in the visible chat: ClientBridge seam (backend.ts) + extension bridge (attach binds the owning webview or opens a new editor pane; send delivers via composer.setText+send — the typed-message path). crow_prompt without sessionId opens a NEW editor-pane chat. prompt_worker + loop handoff ride the same bridge. DONE 2026-11-13: unit 47/47 incl. 5 headed tests (control connection never opened); integration 8/8; e2e SMOKE PASS with live headed proof — crow_prompt to the open window's session shows prompt+reply in that chat, crow_prompt without sessionId opens a NEW editor pane and runs there (fixed the pane's restore-on-connect hijacking the attach: send re-verifies the session and waits for composer readiness).
-- [x] Editor-pane session controls (user request 2026-11-13): New Session / Switch Session / Collapse All / Settings in the editor tab title (`editor/title` menus scoped to `activeWebviewPanelId == 'crowAcp.chat'`); activeChat tracking (editor view-state + sidebar visibility) so commands drive the focused pane; chat attach waits out restore-on-connect (`connected && !isLoading`) before switching so a fresh pane can't be hijacked onto a stale transcript. DONE: e2e/editor-sessions.ts hermetic PASS, screenshots vision-verified (new session in pane, switch loads prior transcript, crow_prompt fresh pane shows only its own turn); ide-smoke re-run SMOKE PASS (2 loop cycles, reload lifecycle, no orphans).
-- [x] Per-client control routing (user bug 2026-11-13: with an editor chat open, ALL sidebar controls mutated the editor pane): one command id per host resolved through a focus heuristic (activeChat) that pinned to the editor pane and never cleared on sidebar clicks. Fix: separate command sets (`crowAcp.*` sidebar, `crowAcp.editor.*` tab title, palette-hidden) resolved deterministically to the client the menus sit above; webview new-thread/switch-thread wait out restore-on-connect like the attach path so early clicks stick. Regression e2e/sidebar-controls.ts reproduced the misrouting on the old build (exit 1) and passes both directions after the fix; editor-sessions + ide-smoke re-run green; unit 47/47; screenshots vision-verified.
-- [x] Delegation pane ownership (user spec 2026-11-13: called agent runs in its OWN editor pane; never switch the sidebar or the caller to the called session; open a new pane if none exists): webviewForSession matched thread-list membership, but every client mirrors the agent's full session list, so crow_prompt hijacked whichever client registered/refreshed first (reproduced BOTH sidebar and caller variants). Now matches only an editor pane ACTIVE on the session; else openChatPane. Regression e2e/delegation-panes.ts (failed on old build, passes after fix); all Playwright suites wired into the framework as `bun run test:e2e` (e2e/run-all.ts, PLAN gate updated). Full gate green: unit 47/47, integration 8/8, 4/4 e2e suites; screenshots vision-verified.
-- [x] Async crow_prompt (user spec 2026-11-13: never block the caller): returns immediately {sessionId, status:"running"}; caller passes callerSessionId (agents know their own id); the callee's final message travels back to the caller as a new prompt through the caller's own visible client, queued until the caller is idle, one per idle (backend outbox). prompt_worker MCP tool DISABLED while the stateful loop is on hold (backend machinery + unit loop tests retained; integration loop test skipped with reason; smoke loop section removed). Unit 52/52 incl. 5 async-delegation tests; integration 7/7 active; e2e 4/4 with delivery assertions; screenshot vision-verified.
-- [ ] Split rlm (session/fork) and task (session/new) into their own MCP servers that run headed inside the IDE via the extension — each delegation opens/forks a VISIBLE chat pane.
-- [ ] MCP scheduling server: wake the agent from idle when a long-running command (real process/PID/command, NOT a subagent) finishes — rio-style notification, celery-like scheduling through the MCP. "I'm running this command and I will wake when it finishes."
-- [ ] Bring crow-research back-and-forth capabilities back into the extension.
-- [ ] Extension API backend for the MCP to interact with (the ClientBridge is the first piece; generalize into a proper extension API surface).
-
-## Deferred (reason recorded)
-
-- Killing tool children on ACP cancel (sleep survives cancel): crow-cli driver work, outside the backend's turn contract. Observed, not a backend bug.
+- crow-cli agent tops out at v2 alpha.7 (python-sdk ceiling): flat AvailableCommand (no type), no replay_complete, stopReason "error" as open string.
+- beta.4 clients must tolerate all three; characterization tests are the gate.
