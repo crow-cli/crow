@@ -9,8 +9,15 @@
 use super::*;
 
 /// A stop reason exactly as it arrives on the wire, then as the UI words it.
+/// beta.4's `StopReason` is internally tagged by `stopReason` and flattened
+/// into the idle update, so the wire form is `{"stopReason": "..."}`; a bare
+/// word is wrapped here the way the idle update carries it.
 fn kind_of(reason: serde_json::Value) -> String {
-    let parsed: v2::StopReason = serde_json::from_value(reason).expect("stop reason parses");
+    let tagged = match reason {
+        serde_json::Value::String(s) => json!({ "stopReason": s }),
+        other => other,
+    };
+    let parsed: v2::StopReason = serde_json::from_value(tagged).expect("stop reason parses");
     stop_kind(&parsed).into_owned()
 }
 
@@ -32,10 +39,16 @@ fn a_stop_reason_outside_the_spec_keeps_the_agents_own_word() {
     assert_eq!(kind_of(json!("error")), "error");
     assert_eq!(kind_of(json!("some_future_reason")), "some_future_reason");
 
-    // `Other` is the arm that carries it, and it is untagged: the wire spelling
-    // is a bare string, not `{"other": "error"}`.
-    let parsed: v2::StopReason = serde_json::from_value(json!("error")).unwrap();
-    assert!(matches!(parsed, v2::StopReason::Other(reason) if reason == "error"));
+    // beta.4 made `error` a spec variant of its own; a reason nobody has
+    // implemented yet lands on `Other`, which keeps the agent's word verbatim.
+    let parsed: v2::StopReason =
+        serde_json::from_value(json!({ "stopReason": "error" })).unwrap();
+    assert!(matches!(parsed, v2::StopReason::Error(_)));
+    let parsed: v2::StopReason =
+        serde_json::from_value(json!({ "stopReason": "some_future_reason" })).unwrap();
+    assert!(
+        matches!(parsed, v2::StopReason::Other(reason) if reason.stop_reason == "some_future_reason")
+    );
 }
 
 /// Only `cancelled` reads as an interrupt. A provider error is a failure the
@@ -50,9 +63,9 @@ fn cancelled_means_cancelled_and_nothing_else() {
     };
     assert!(stopped(v2::StopReason::Cancelled).cancelled());
     assert!(!stopped(v2::StopReason::EndTurn).cancelled());
-    assert!(!stopped(v2::StopReason::Other("error".into())).cancelled());
+    assert!(!stopped(v2::StopReason::Error(v2::ErrorStopReason::new())).cancelled());
     assert!(stopped(v2::StopReason::EndTurn).stopped());
-    assert!(stopped(v2::StopReason::Other("error".into())).stopped());
+    assert!(stopped(v2::StopReason::Error(v2::ErrorStopReason::new())).stopped());
     assert!(!closed().stopped(), "a dead connection is a failure, not a stop");
 }
 

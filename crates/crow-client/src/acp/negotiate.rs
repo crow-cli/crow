@@ -20,9 +20,10 @@
 //! `initialize`, so it cannot be built with the SDK's own version guard on.
 //! Since 2.2 that guard is a state machine — `Client::v2()` starts the
 //! connection `Uninitialized` and rejects every request until it has watched the
-//! round trip happen. Both stacks therefore build on `Client::builder()`, and
-//! the v2 one adds `without_acp_version_guard()`, which the SDK documents for
-//! exactly this consumer: routing infrastructure that validates the raw
+//! round trip happen. Both stacks therefore build on the raw `Builder::new`,
+//! which since 5.0 IS the unguarded builder (the old
+//! `Client.builder().without_acp_version_guard()` spelling is gone), documented
+//! for exactly this consumer: routing infrastructure that validates the raw
 //! `initialize` itself before picking an implementation. `classify` below is that
 //! validation.
 //!
@@ -35,14 +36,12 @@ use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::StreamExt;
 use serde_json::Value;
 
-use agent_client_protocol::schema::v1::{
-    InitializeResponse as V1InitializeResponse, RequestId, Response as RpcResponse,
-};
-use agent_client_protocol::schema::v2::{self, InitializeResponse as V2InitializeResponse};
+use agent_client_protocol::v1::schema::{InitializeResponse as V1InitializeResponse, RequestId};
+use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::v2::schema::InitializeResponse as V2InitializeResponse;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{
-    Channel, Error as AcpError, RawJsonRpcMessage, TransportBatch, TransportBatchEntry,
-    TransportFrame,
+    Channel, Error as AcpError, RawJsonRpcId, RawJsonRpcMessage, RawJsonRpcResponse, TransportFrame,
 };
 
 /// The probe's request id. The adopted stack starts its own counter at zero, so
@@ -165,7 +164,7 @@ pub(crate) fn v2_initialize_request() -> v2::InitializeRequest {
         ProtocolVersion::V2,
         v2::Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
     )
-    .capabilities(v2::ClientCapabilities::new().auth(v2::AuthCapabilities::new()))
+    .capabilities(v2::ClientCapabilities::new().auth(v2::ClientAuthCapabilities::new()))
 }
 
 /// The union `initialize` params: v2's half verbatim, plus v1's identity and
@@ -237,7 +236,7 @@ pub(crate) async fn probe(
     channel: Channel,
     deadline: Duration,
 ) -> Result<(Negotiated, Channel), AcpError> {
-    let Channel { mut rx, tx } = channel;
+    let (mut rx, tx) = channel.into_parts();
     let (negotiated, buffered) = negotiate(&mut rx, &tx, deadline).await?;
     Ok((negotiated, adopt(rx, tx, buffered)))
 }
@@ -254,13 +253,10 @@ pub(crate) fn adopt(
     mut buffered: Buffered,
 ) -> Channel {
     if buffered.is_empty() {
-        return Channel { rx, tx };
+        return Channel::new(rx, tx);
     }
     let (client_side, relay_side) = Channel::duplex();
-    let Channel {
-        rx: from_client,
-        tx: to_client,
-    } = relay_side;
+    let (from_client, to_client) = relay_side.into_parts();
     tokio::spawn(async move {
         let mut rx = rx;
         while let Some(frame) = buffered.pop_front() {
@@ -298,40 +294,64 @@ fn scan(frame: TransportFrame) -> Scan {
             None => Scan::Other(TransportFrame::Single(message)),
         },
         // Malformed wire input is retained for relays: a banner printed ahead of
-        // the JSON-RPC stream must reach the adopter unchanged.
-        TransportFrame::Malformed { .. } => Scan::Other(frame),
-        TransportFrame::Batch(batch) => {
-            let mut rest = Vec::with_capacity(batch.len());
-            let mut found = None;
-            for entry in batch.into_entries() {
-                let hit = match &entry {
-                    TransportBatchEntry::Message(message) if found.is_none() => answer_of(message),
-                    _ => None,
+        // the JSON-RPC stream must reach the adopter unchanged. Since 5.x the
+        // SDK does not parse JSON-RPC batches at all (v2 forbids them), so a
+        // batched answer arrives here as raw text; a v1 peer may still batch,
+        // and the probe keeps cracking batches open by hand.
+        TransportFrame::Malformed { raw, error } => match scan_batch(&raw) {
+            Some((answer, rest)) => {
+                let leftover = if rest.is_empty() {
+                    None
+                } else {
+                    Some(TransportFrame::Malformed {
+                        raw: Value::Array(rest).to_string(),
+                        error: error.clone(),
+                    })
                 };
-                match hit {
-                    Some(answer) => found = Some(answer),
-                    None => rest.push(entry),
-                }
+                Scan::Answer(answer, leftover)
             }
-            let leftover = TransportBatch::from_entries(rest).map(TransportFrame::Batch);
-            match found {
-                Some(answer) => Scan::Answer(answer, leftover),
-                // Nothing was consumed, so the rebuild is the original batch, and
-                // a batch is structurally non-empty.
-                None => Scan::Other(leftover.expect("a batch carries at least one entry")),
-            }
+            None => Scan::Other(TransportFrame::Malformed { raw, error }),
+        },
+        // Future frame kinds pass through untouched, like any other relay.
+        other => Scan::Other(other),
+    }
+}
+
+/// A batched initialize answer inside a frame the SDK refused to parse.
+/// Returns the answer and the entries that were not consumed, verbatim.
+fn scan_batch(raw: &str) -> Option<(Result<Value, AcpError>, Vec<Value>)> {
+    let entries: Vec<Value> = serde_json::from_str(raw).ok()?;
+    let mut rest = Vec::with_capacity(entries.len());
+    let mut found = None;
+    for entry in entries {
+        let hit = if found.is_none() {
+            serde_json::from_value::<RawJsonRpcResponse>(entry.clone())
+                .ok()
+                .and_then(|response| answer_of_response(&response))
+        } else {
+            None
+        };
+        match hit {
+            Some(answer) => found = Some(answer),
+            None => rest.push(entry),
         }
     }
+    found.map(|answer| (answer, rest))
 }
 
 fn answer_of(message: &RawJsonRpcMessage) -> Option<Result<Value, AcpError>> {
     let RawJsonRpcMessage::Response(response) = message else {
         return None;
     };
+    answer_of_response(response)
+}
+
+fn answer_of_response(response: &RawJsonRpcResponse) -> Option<Result<Value, AcpError>> {
+    let probe = RawJsonRpcId::from(PROBE_ID);
     match response {
-        RpcResponse::Result { id, result } if *id == PROBE_ID => Some(Ok(result.clone())),
-        RpcResponse::Error { id, error } if *id == PROBE_ID => Some(Err(AcpError::new(
-            i32::from(error.code.clone()),
+        RawJsonRpcResponse::Result { id, result } if *id == probe => Some(Ok(result.clone())),
+        RawJsonRpcResponse::Error { id, error } if *id == probe => Some(Err(AcpError::new(
+            error.code,
             format!("initialize: {}", error.message),
         ))),
         _ => None,

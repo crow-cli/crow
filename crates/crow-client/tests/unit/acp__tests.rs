@@ -270,13 +270,12 @@ fn initialize_advertises_backchat_auth_caps() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plugin_ui_events_are_compositor_notifications_not_prompts() {
-    use agent_client_protocol::schema::v1::{AgentCapabilities, InitializeResponse};
+    use agent_client_protocol::v1::schema::{AgentCapabilities, InitializeResponse};
     use std::time::Duration;
 
     let (extension_tx, mut extension_rx) = tokio::sync::mpsc::unbounded_channel();
     let request_tx = extension_tx.clone();
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("plugin-command-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, cx| {
@@ -511,14 +510,13 @@ async fn plugin_ui_events_are_compositor_notifications_not_prompts() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn extension_requests_stay_local_when_the_agent_did_not_advertise_the_family() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, NewSessionResponse,
     };
     use std::time::Duration;
 
     let (extension_tx, mut extension_rx) = tokio::sync::mpsc::unbounded_channel();
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("standard-acp-agent")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -590,11 +588,10 @@ async fn extension_requests_stay_local_when_the_agent_did_not_advertise_the_fami
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_compositor_catalog_does_not_require_agent_extension_capability() {
-    use agent_client_protocol::schema::v1::{AgentCapabilities, InitializeResponse};
+    use agent_client_protocol::v1::schema::{AgentCapabilities, InitializeResponse};
     use std::time::Duration;
 
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("standard-acp-agent")
         .on_receive_request(
             async move |init: InitializeRequest, responder, cx| {
@@ -646,14 +643,13 @@ async fn client_compositor_catalog_does_not_require_agent_extension_capability()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_compositor_command_does_not_require_agent_extension_capability() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, NewSessionResponse,
     };
     use std::time::Duration;
 
     let (invoke_tx, mut invoke_rx) = tokio::sync::mpsc::unbounded_channel();
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("standard-acp-with-client-compositor")
         .on_receive_request(
             async move |init: InitializeRequest, responder, cx| {
@@ -738,7 +734,7 @@ async fn client_compositor_command_does_not_require_agent_extension_capability()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn harness_new_action_uses_the_native_new_tab_flow_without_reinitializing() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, NewSessionResponse,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -746,8 +742,7 @@ async fn harness_new_action_uses_the_native_new_tab_flow_without_reinitializing(
 
     let initializes = Arc::new(AtomicUsize::new(0));
     let sessions = Arc::new(AtomicUsize::new(0));
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("switchable-acp")
         .on_receive_request(
             {
@@ -870,13 +865,12 @@ async fn harness_new_action_uses_the_native_new_tab_flow_without_reinitializing(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn overlay_cancel_reaches_the_compositor_while_submit_is_pending() {
-    use agent_client_protocol::schema::v1::{InitializeResponse, NewSessionResponse};
+    use agent_client_protocol::v1::schema::{InitializeResponse, NewSessionResponse};
     use std::time::Duration;
 
     let release = Arc::new(tokio::sync::Notify::new());
     let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("slow-client-compositor")
         .on_receive_request(
             async move |init: InitializeRequest, responder, cx| {
@@ -945,7 +939,7 @@ async fn overlay_cancel_reaches_the_compositor_while_submit_is_pending() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plugin_operation_defers_agent_requests_and_queued_prompts_until_complete() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         InitializeResponse, NewSessionResponse, PromptResponse, SetSessionConfigOptionResponse,
         StopReason,
     };
@@ -957,7 +951,7 @@ async fn plugin_operation_defers_agent_requests_and_queued_prompts_until_complet
     let primary_pending = Arc::new(AtomicBool::new(false));
     let leaked_request = Arc::new(AtomicBool::new(false));
     let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
-    let agent = Agent.builder().name("handoff-window-fixture")
+    let agent = Builder::new(Agent).name("handoff-window-fixture")
         .on_receive_request(
             async move |init: InitializeRequest, responder, cx| {
                 responder.respond(InitializeResponse::new(init.protocol_version))?;
@@ -1228,7 +1222,7 @@ fn list_session_flag_reads_initialize_payload() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn form_auth_stays_configured_when_the_startup_session_succeeds() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, AuthMethod, AuthMethodAgent, InitializeResponse, NewSessionResponse,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1237,8 +1231,7 @@ async fn form_auth_stays_configured_when_the_startup_session_succeeds() {
     let sessions = Arc::new(AtomicUsize::new(0));
     let mut meta = serde_json::Map::new();
     meta.insert("api-key".into(), json!({ "provider": "acme" }));
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("already-authenticated-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -1317,7 +1310,7 @@ async fn form_auth_stays_configured_when_the_startup_session_succeeds() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn elicitation_create_waits_for_the_tui_form_reply() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, CreateElicitationRequest, ElicitationAction, InitializeResponse,
         NewSessionResponse,
     };
@@ -1345,8 +1338,7 @@ async fn elicitation_create_waits_for_the_tui_form_reply() {
     .expect("standard form request");
     let (result_tx, result_rx) = tokio::sync::oneshot::channel();
     let result_tx = Arc::new(Mutex::new(Some(result_tx)));
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("elicitation-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -1431,7 +1423,7 @@ async fn elicitation_create_waits_for_the_tui_form_reply() {
     };
     assert!(matches!(
         accepted.content.as_ref().and_then(|content| content.get("question_0")),
-        Some(agent_client_protocol::schema::v1::ElicitationContentValue::String(value))
+        Some(agent_client_protocol::v1::schema::ElicitationContentValue::String(value))
             if value == "remote"
     ));
     let _ = cmd_tx.send(Cmd::Shutdown);
@@ -1440,14 +1432,13 @@ async fn elicitation_create_waits_for_the_tui_form_reply() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_session_binds_before_applying_initial_config() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, NewSessionResponse, SessionConfigOption,
         SessionConfigSelectOption,
     };
     use std::time::{Duration, Instant};
 
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("setup-order-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -1513,14 +1504,13 @@ async fn new_session_binds_before_applying_initial_config() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn set_config_option_response_updates_client_state_without_a_notification() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, NewSessionResponse, SessionConfigOption,
         SessionConfigSelectOption, SetSessionConfigOptionResponse,
     };
     use std::time::{Duration, Instant};
 
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("config-response-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -1610,7 +1600,7 @@ async fn set_config_option_response_updates_client_state_without_a_notification(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn effort_selection_uses_the_advertised_thought_level_config_id() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, NewSessionResponse, SessionConfigOption,
         SessionConfigOptionCategory, SessionConfigSelectOption, SetSessionConfigOptionResponse,
     };
@@ -1630,8 +1620,7 @@ async fn effort_selection_uses_the_advertised_thought_level_config_id() {
         )
         .category(SessionConfigOptionCategory::ThoughtLevel)
     };
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("semantic-effort-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -1700,15 +1689,14 @@ async fn effort_selection_uses_the_advertised_thought_level_config_id() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_tree_config_set_uses_standard_acp_and_folds_response_only_state() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, NewSessionResponse, SessionConfigOption,
         SessionConfigSelectOption, SetSessionConfigOptionResponse,
     };
     use std::time::{Duration, Instant};
 
     let (result_tx, mut result_rx) = tokio::sync::mpsc::unbounded_channel();
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("client-config-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -1824,7 +1812,7 @@ async fn client_tree_config_set_uses_standard_acp_and_folds_response_only_state(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_session_prefers_resume_and_binds_before_applying_initial_config() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
         ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities, SessionConfigOption,
         SessionConfigSelectOption, SessionResumeCapabilities,
@@ -1833,8 +1821,7 @@ async fn resume_session_prefers_resume_and_binds_before_applying_initial_config(
     use std::time::{Duration, Instant};
 
     let load_calls = Arc::new(AtomicUsize::new(0));
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("load-config-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -1938,7 +1925,7 @@ async fn resume_session_prefers_resume_and_binds_before_applying_initial_config(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_session_falls_back_to_load_when_resume_is_rejected() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
         ResumeSessionRequest, SessionCapabilities, SessionResumeCapabilities,
     };
@@ -1947,8 +1934,7 @@ async fn resume_session_falls_back_to_load_when_resume_is_rejected() {
 
     let resume_calls = Arc::new(AtomicUsize::new(0));
     let load_calls = Arc::new(AtomicUsize::new(0));
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("resume-fallback-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -2046,7 +2032,7 @@ async fn resume_session_falls_back_to_load_when_resume_is_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prompts_while_running_wait_in_fifo_without_session_cancel() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeRequest, InitializeResponse, NewSessionRequest,
         NewSessionResponse, PromptResponse, StopReason,
     };
@@ -2057,8 +2043,7 @@ async fn prompts_while_running_wait_in_fifo_without_session_cancel() {
     let (release_first_tx, release_first_rx) = tokio::sync::oneshot::channel::<()>();
     let release_first_rx = Arc::new(Mutex::new(Some(release_first_rx)));
 
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("queue-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -2193,7 +2178,7 @@ async fn prompts_while_running_wait_in_fifo_without_session_cancel() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn composition_catalog_is_ready_before_the_first_prompt() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeRequest, InitializeResponse, NewSessionRequest,
         NewSessionResponse, PromptResponse, SessionConfigOption, SessionConfigSelectOption,
         StopReason,
@@ -2201,8 +2186,7 @@ async fn composition_catalog_is_ready_before_the_first_prompt() {
     use std::time::{Duration, Instant};
 
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("startup-session-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -2297,7 +2281,7 @@ async fn composition_catalog_is_ready_before_the_first_prompt() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auth_failure_parks_prompts_but_reports_steers_back_to_the_client() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, AuthMethod, AuthMethodAgent, AuthenticateResponse, InitializeRequest,
         InitializeResponse, NewSessionRequest, NewSessionResponse, PromptResponse, StopReason,
     };
@@ -2306,8 +2290,7 @@ async fn auth_failure_parks_prompts_but_reports_steers_back_to_the_client() {
 
     let rejected_first = Arc::new(AtomicBool::new(false));
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("auth-queue-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -2510,11 +2493,11 @@ async fn auth_failure_parks_prompts_but_reports_steers_back_to_the_client() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authenticate_rejection_reports_failure_instead_of_another_sign_in_hint() {
-    use agent_client_protocol::schema::v1::{AuthMethod, AuthMethodAgent, InitializeRequest,
+    use agent_client_protocol::v1::schema::{AuthMethod, AuthMethodAgent, InitializeRequest,
         InitializeResponse, NewSessionRequest};
     use std::time::{Duration, Instant};
     let reason = "Onboarding failed: account is not eligible in your location";
-    let agent = Agent.builder().name("auth-rejection")
+    let agent = Builder::new(Agent).name("auth-rejection")
         .on_receive_request(async move |init: InitializeRequest, responder, _cx| {
             responder.respond(InitializeResponse::new(init.protocol_version)
                 .agent_info(Implementation::new("auth-rejection", "0"))
@@ -2579,7 +2562,7 @@ async fn authenticated_session_setup_auth_required_restores_needs_auth() {
 }
 
 async fn assert_authentication_before_session_setup(setup_error: Option<i32>) {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AuthMethod, AuthMethodAgent, AuthenticateResponse, InitializeRequest,
         InitializeResponse, NewSessionRequest, NewSessionResponse,
     };
@@ -2589,7 +2572,7 @@ async fn assert_authentication_before_session_setup(setup_error: Option<i32>) {
     let authenticated = Arc::new(AtomicBool::new(false));
     let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
     let release_rx = Arc::new(Mutex::new(Some(release_rx)));
-    let agent = Agent.builder().name("auth-session-boundary")
+    let agent = Builder::new(Agent).name("auth-session-boundary")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
                 responder.respond(InitializeResponse::new(init.protocol_version)
@@ -2686,7 +2669,7 @@ async fn assert_authentication_before_session_setup(setup_error: Option<i32>) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_new_auth_failure_parks_the_first_intent_without_retry_storms() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, AuthMethod, AuthMethodAgent, AuthenticateResponse, InitializeRequest,
         InitializeResponse, NewSessionRequest, NewSessionResponse, PromptResponse, StopReason,
     };
@@ -2696,8 +2679,7 @@ async fn session_new_auth_failure_parks_the_first_intent_without_retry_storms() 
     let authenticated = Arc::new(AtomicBool::new(false));
     let new_attempts = Arc::new(AtomicUsize::new(0));
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("new-auth-queue-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -2824,7 +2806,7 @@ async fn session_new_auth_failure_parks_the_first_intent_without_retry_storms() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn late_steer_rejection_is_not_retried_by_the_transport_after_auth() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, AuthMethod, AuthMethodAgent, AuthenticateResponse, InitializeRequest,
         InitializeResponse, NewSessionRequest, NewSessionResponse, PromptResponse, StopReason,
     };
@@ -2839,8 +2821,7 @@ async fn late_steer_rejection_is_not_retried_by_the_transport_after_auth() {
     let first_rejected = Arc::new(AtomicBool::new(false));
     let steer_rejected = Arc::new(AtomicBool::new(false));
 
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("late-steer-auth-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -3021,7 +3002,7 @@ async fn late_steer_rejection_is_not_retried_by_the_transport_after_auth() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn steer_sends_a_concurrent_prompt_without_interrupting_the_turn() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeRequest, InitializeResponse, NewSessionRequest,
         NewSessionResponse, PromptResponse, StopReason,
     };
@@ -3032,8 +3013,7 @@ async fn steer_sends_a_concurrent_prompt_without_interrupting_the_turn() {
     let (release_first_tx, release_first_rx) = tokio::sync::oneshot::channel::<()>();
     let release_first_rx = Arc::new(Mutex::new(Some(release_first_rx)));
 
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("steer-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -3173,7 +3153,7 @@ async fn steer_sends_a_concurrent_prompt_without_interrupting_the_turn() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rejected_steer_reports_deferred_without_transport_retry() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeRequest, InitializeResponse, NewSessionRequest,
         NewSessionResponse, PromptResponse, StopReason,
     };
@@ -3185,8 +3165,7 @@ async fn rejected_steer_reports_deferred_without_transport_retry() {
     let release_first_rx = Arc::new(Mutex::new(Some(release_first_rx)));
     let steer_attempts = Arc::new(AtomicUsize::new(0));
 
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("steer-fallback-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -3324,7 +3303,7 @@ async fn rejected_steer_reports_deferred_without_transport_retry() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_sends_session_cancel_while_prompt_is_in_flight() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeRequest, InitializeResponse, NewSessionRequest,
         NewSessionResponse, PromptResponse, StopReason,
     };
@@ -3338,8 +3317,7 @@ async fn interrupt_sends_session_cancel_while_prompt_is_in_flight() {
     let release_tx = Arc::new(Mutex::new(Some(release_tx)));
     let release_rx = Arc::new(Mutex::new(Some(release_rx)));
 
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("cancel-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -3548,7 +3526,7 @@ fn bind_session_registers_current_and_adopts_pending_prompts() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sessions_run_concurrent_prompts_on_one_connection() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeRequest, InitializeResponse, NewSessionRequest,
         NewSessionResponse, PromptResponse, StopReason,
     };
@@ -3561,8 +3539,7 @@ async fn sessions_run_concurrent_prompts_on_one_connection() {
     let release_s1_tx = Arc::new(Mutex::new(Some(release_s1_tx)));
     let release_s1_rx = Arc::new(Mutex::new(Some(release_s1_rx)));
 
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("multi-session-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -3698,7 +3675,7 @@ async fn sessions_run_concurrent_prompts_on_one_connection() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stale_text_prompt_finish_cannot_release_a_rebound_sessions_new_turn() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeRequest, InitializeResponse, NewSessionRequest,
         NewSessionResponse, PromptResponse, ResumeSessionRequest, ResumeSessionResponse,
         SessionCapabilities, SessionResumeCapabilities, StopReason,
@@ -3712,8 +3689,7 @@ async fn stale_text_prompt_finish_cannot_release_a_rebound_sessions_new_turn() {
     let releases = Arc::new(Mutex::new(VecDeque::from([old_rx, new_rx, third_rx])));
     let (arrived_tx, mut arrived_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("stale-finish-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -3863,15 +3839,14 @@ async fn stale_text_prompt_finish_cannot_release_a_rebound_sessions_new_turn() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prompt_for_an_unbound_session_is_rejected_not_rerouted() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeRequest, InitializeResponse, NewSessionRequest,
         NewSessionResponse, PromptResponse, StopReason,
     };
     use std::time::{Duration, Instant};
 
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .name("unknown-session-mock")
         .on_receive_request(
             async move |init: InitializeRequest, responder, _cx| {
@@ -4146,8 +4121,7 @@ macro_rules! reattach_mock {
     ($name:literal, $caps:expr, $counters:expr, $refuse:expr) => {{
         let counters = $counters;
         let refuse: Option<AcpError> = $refuse;
-        Agent
-            .builder()
+        Builder::new(Agent)
             .name($name)
             .on_receive_request(
                 {
@@ -4233,7 +4207,7 @@ fn startup_error(events: &[CtlEvent]) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn startup_session_id_resumes_when_the_agent_advertises_resume() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
         ResumeSessionResponse, SessionCapabilities, SessionResumeCapabilities,
     };
@@ -4263,7 +4237,7 @@ async fn startup_session_id_resumes_when_the_agent_advertises_resume() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn startup_session_id_loads_when_only_load_session_is_advertised() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
         ResumeSessionResponse,
     };
@@ -4291,7 +4265,7 @@ async fn startup_session_id_loads_when_only_load_session_is_advertised() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn startup_session_id_the_agent_refuses_fails_instead_of_binding_a_new_session() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
         ResumeSessionResponse,
     };
@@ -4321,7 +4295,7 @@ async fn startup_session_id_the_agent_refuses_fails_instead_of_binding_a_new_ses
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn startup_session_id_with_no_reattach_method_says_so_instead_of_starting_fresh() {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
         ResumeSessionResponse,
     };

@@ -11,6 +11,14 @@ resolver = "2"
 lto = true
 strip = true
 
+# The beta.4 schema crate (agent-client-protocol-schema 1.22.0) grew the test
+# binary's DWARF past the 4 GiB limit of a 32-bit `.debug_info` relocation, so
+# `cargo test` failed to link with "relocation R_X86_64_32 out of range". Split
+# DWARF keeps full debug info in sidecar `.dwo` files and a skeleton in the
+# binary, which links cleanly and stays debuggable. No codegen or runtime change.
+[profile.dev]
+split-debuginfo = "unpacked"
+
 # Opt-in fast local build profile (`cargo build --profile devlocal` while
 # iterating): plain debug codegen — no optimizations, incremental — the
 # fastest turnaround for build/test loops. What ships is [profile.release]

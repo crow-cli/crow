@@ -1,4 +1,5 @@
 use super::*;
+use agent_client_protocol::v1::schema::Error as AcpError;
 use serde_json::json;
 
 fn crow_acp_methods() -> Value {
@@ -125,7 +126,7 @@ fn empty_auth_methods_are_none() {
 
 #[test]
 fn auth_required_error_matches_code() {
-    let err = AcpError::auth_required();
+    let err: SdkError = AcpError::auth_required().into();
     assert!(is_auth_required_error(&err));
     assert!(is_auth_failure_message("Authentication required"));
 }
@@ -152,19 +153,19 @@ fn needs_auth_notice_points_at_auth() {
 
 #[test]
 fn structured_auth_failure_keeps_the_provider_reason() {
-    let err: AcpError = serde_json::from_value(json!({
+    let err: SdkError = serde_json::from_value::<AcpError>(json!({
         "code": -32603, "message": "Internal error",
         "data": {
             "errorKind": "authentication_failed",
             "details": "Failed to authenticate. API Error: 403 Insufficient account balance"
         }
-    })).unwrap();
+    })).unwrap().into();
     assert!(is_auth_required_error(&err));
     assert_eq!(acp_error_message(&err),
         "Failed to authenticate. API Error: 403 Insufficient account balance");
-    let unrelated: AcpError = serde_json::from_value(json!({
+    let unrelated: SdkError = serde_json::from_value::<AcpError>(json!({
         "code": -32603, "message": "Internal error",
         "data": {"errorKind": "billing_error"}
-    })).unwrap();
+    })).unwrap().into();
     assert!(!is_auth_required_error(&unrelated));
 }

@@ -1,15 +1,15 @@
 use super::*;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     AgentCapabilities, InitializeRequest, InitializeResponse, NewSessionResponse, PromptResponse,
     SetSessionConfigOptionResponse, StopReason,
 };
 
 #[tokio::test(start_paused = true)]
 async fn browser_auth_outlives_the_short_control_deadline() {
-    use agent_client_protocol::schema::v1::AuthenticateResponse;
+    use agent_client_protocol::v1::schema::AuthenticateResponse;
     let (release, release_rx) = tokio::sync::watch::channel(false);
     let (started, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
-    let agent = Agent.builder().on_receive_request(
+    let agent = Builder::new(Agent).on_receive_request(
         async move |_req: AuthenticateRequest, responder, cx| {
             let _ = started.send(());
             let mut release_rx = release_rx.clone();
@@ -20,7 +20,7 @@ async fn browser_auth_outlives_the_short_control_deadline() {
             Ok(())
         }, on_receive_request!(),
     );
-    Client.builder().connect_with(agent, move |cx: ConnectionTo<Agent>| async move {
+    Builder::new(Client).connect_with(agent, move |cx: ConnectionTo<Agent>| async move {
         let (bus, _events) = std::sync::mpsc::channel();
         let (done, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
         let methods = parse_auth_methods(&json!([{"id":"login", "name":"Browser login"}]),
@@ -67,8 +67,7 @@ async fn check_slow_control(config: bool) {
     let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::unbounded_channel();
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
     let (prompt_release_tx, prompt_release_rx) = tokio::sync::watch::channel(false);
-    let agent = Agent
-        .builder()
+    let agent = Builder::new(Agent)
         .on_receive_request(
             async move |req: InitializeRequest, responder, _cx| {
                 responder.respond(
@@ -233,7 +232,7 @@ async fn slow_config_only_blocks_following_prompts_on_its_own_session() {
 async fn prompts_and_steers_outlive_the_control_request_deadline() {
     let (release, release_rx) = tokio::sync::watch::channel(false);
     let (started, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
-    let agent = Agent.builder().on_receive_request(
+    let agent = Builder::new(Agent).on_receive_request(
         async move |_req: PromptRequest, responder, cx| {
             let _ = started.send(());
             let mut release_rx = release_rx.clone();
@@ -245,8 +244,7 @@ async fn prompts_and_steers_outlive_the_control_request_deadline() {
         },
         on_receive_request!(),
     );
-    Client
-        .builder()
+    Builder::new(Client)
         .connect_with(agent, move |cx: ConnectionTo<Agent>| async move {
             let (bus, _) = std::sync::mpsc::channel();
             let (done, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -298,8 +296,7 @@ async fn prompts_and_steers_outlive_the_control_request_deadline() {
 }
 
 fn model_switch_agent(reject: bool) -> impl ConnectTo<Client> + 'static {
-    Agent
-        .builder()
+    Builder::new(Agent)
         .on_receive_request(
             async move |req: InitializeRequest, responder, _cx| {
                 responder.respond(
@@ -410,7 +407,7 @@ async fn accepted_model_switch_folds_config_response() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn version_neutral_commands_are_handled_without_a_typed_request() {
     let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel::<(String, Value)>();
-    let agent = Agent.builder().on_receive_request(
+    let agent = Builder::new(Agent).on_receive_request(
         async move |request: UntypedMessage, responder, _cx| {
             let _ = seen_tx.send((request.method().to_string(), request.params().clone()));
             responder.respond(json!({ "ok": true }))
@@ -418,8 +415,7 @@ async fn version_neutral_commands_are_handled_without_a_typed_request() {
         on_receive_request!(),
     );
     let (bus, events) = std::sync::mpsc::channel::<AppEvent>();
-    Client
-        .builder()
+    Builder::new(Client)
         .connect_with(agent, move |cx: ConnectionTo<Agent>| async move {
             let queue = Cmd::QueueSnapshot {
                 snapshot: crate::bus::QueueSnapshot {

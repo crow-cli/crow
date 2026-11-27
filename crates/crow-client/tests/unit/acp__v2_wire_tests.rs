@@ -13,10 +13,10 @@
 //! shapes the SDK really has. They stay worth keeping: the next bump should
 //! trip them again rather than quietly move the wire underneath the client.
 
-use agent_client_protocol::schema::v2 as v2;
+use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::Client;
+use agent_client_protocol::{Builder, Client};
 use serde_json::{json, Value};
 
 /// The v2 `initialize` request this client sends: role-agnostic `info`
@@ -321,14 +321,15 @@ fn v2_permission_request_separates_prompt_copy_from_tool_state() {
 /// Compile-time proof that the pinned crate still exposes the entry point crow's
 /// v2 stack is actually built on.
 ///
-/// `without_acp_version_guard` is load-bearing, not cosmetic. It is the only way
-/// to get a v2-speaking connection whose callbacks receive a raw `ConnectionTo`,
-/// and crow needs exactly that because `negotiate::probe` consumes the
-/// `initialize` round trip at the transport layer before any connection exists.
-/// Build the v2 stack on `Client::v2()` instead and the connection never leaves
-/// `Uninitialized`, so every request is rejected with "ACP initialization must
-/// complete before ... can be used". If a future SDK drops or renames the escape
-/// hatch this stops compiling — which is the point of pinning it here.
+/// Since 5.x the raw `Builder::new(Client)` IS the version-neutral, guard-free
+/// entry point: callbacks receive a raw `ConnectionTo`, and no initialization
+/// guard rejects requests before `initialize` completes. crow needs exactly
+/// that because `negotiate::probe` consumes the `initialize` round trip at the
+/// transport layer before any connection exists. (The old
+/// `Client.builder().without_acp_version_guard()` escape hatch is gone — the
+/// raw builder no longer guards, so the method was removed.) If a future SDK
+/// drops or renames this entry point the test stops compiling — which is the
+/// point of pinning it here.
 ///
 /// The other two still exist and crow deliberately uses neither: `Client::v2()`
 /// hands back a `V2ConnectionTo` that cannot convert back to the type v1 uses,
@@ -337,10 +338,7 @@ fn v2_permission_request_separates_prompt_copy_from_tool_state() {
 /// reasons are written out in `negotiate.rs`.
 #[test]
 fn v2_client_entry_points_exist() {
-    let _builder = Client
-        .builder()
-        .without_acp_version_guard()
-        .name(env!("CARGO_PKG_NAME"));
+    let _builder = Builder::new(Client).name(env!("CARGO_PKG_NAME"));
     let _v2_builder = Client.v2().name(env!("CARGO_PKG_NAME"));
     let _connector = Client.protocol_connector();
 }

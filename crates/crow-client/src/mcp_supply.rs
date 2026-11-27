@@ -32,12 +32,13 @@
 
 use std::path::{Path, PathBuf};
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     EnvVariable, HttpHeader, McpServer as WireMcpServer, McpServerHttp, McpServerSse,
     McpServerStdio,
 };
-use agent_client_protocol::schema::v2::{
-    self, McpServer as WireMcpServerV2, McpServerHttp as WireMcpServerHttpV2,
+use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::v2::schema::{
+    McpServer as WireMcpServerV2, McpServerHttp as WireMcpServerHttpV2,
     McpServerStdio as WireMcpServerStdioV2, OtherMcpServer,
 };
 
@@ -117,7 +118,7 @@ impl McpServer {
                     "headers".to_owned(),
                     serde_json::to_value(wire_headers(headers)).unwrap_or_default(),
                 );
-                WireMcpServerV2::Other(OtherMcpServer::new("sse", fields))
+                WireMcpServerV2::Other(OtherMcpServer::new("sse", fields.into_iter().collect()))
             }
         }
     }

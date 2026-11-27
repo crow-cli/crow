@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     AuthCapabilities, AuthenticateRequest, CancelNotification, ClientCapabilities,
     ClientSessionCapabilities, CompactionCapabilities, ContentBlock, CreateElicitationRequest,
     CreateElicitationResponse,
@@ -36,8 +36,8 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{
-    on_receive_notification, on_receive_request, AcpAgent, Agent, ByteStreams, Client, ConnectTo,
-    ConnectionTo, Error as AcpError, Handled, SentRequest, UntypedMessage,
+    on_receive_notification, on_receive_request, AcpAgent, Agent, Builder, ByteStreams, Client,
+    ConnectTo, ConnectionTo, Error as AcpError, Handled, SentRequest, UntypedMessage,
 };
 
 use crate::acp_auth::{
@@ -324,9 +324,12 @@ pub fn check_blocking(argv: Vec<String>) -> Result<String> {
             <AcpAgent as ConnectTo<Client>>::into_channel_and_future(agent);
         // Aborting the driver drops AcpAgent's child guard, which kills the
         // process group: a check must not leave the agent it probed running.
-        let driver = tokio::spawn(driver);
+        // A spawned agent always owns a driver; passive endpoints return None.
+        let driver = driver.map(tokio::spawn);
         let probed = negotiate::probe(channel, SETUP_DEADLINE).await;
-        driver.abort();
+        if let Some(driver) = driver {
+            driver.abort();
+        }
         let (negotiated, _channel) = probed.map_err(acp_err)?;
         Ok(negotiated.describe())
     })
@@ -449,8 +452,8 @@ impl TurnOutcome {
 }
 
 /// v1's stop reason as the UI's word for it.
-fn v1_stop_kind(reason: agent_client_protocol::schema::v1::StopReason) -> &'static str {
-    use agent_client_protocol::schema::v1::StopReason as Reason;
+fn v1_stop_kind(reason: agent_client_protocol::v1::schema::StopReason) -> &'static str {
+    use agent_client_protocol::v1::schema::StopReason as Reason;
     match reason {
         Reason::EndTurn => "completed",
         Reason::MaxTokens => "max-tokens",
@@ -461,8 +464,8 @@ fn v1_stop_kind(reason: agent_client_protocol::schema::v1::StopReason) -> &'stat
     }
 }
 
-impl From<Result<agent_client_protocol::schema::v1::PromptResponse, AcpError>> for TurnOutcome {
-    fn from(result: Result<agent_client_protocol::schema::v1::PromptResponse, AcpError>) -> Self {
+impl From<Result<agent_client_protocol::v1::schema::PromptResponse, AcpError>> for TurnOutcome {
+    fn from(result: Result<agent_client_protocol::v1::schema::PromptResponse, AcpError>) -> Self {
         match result {
             Ok(response) => Self::Stopped {
                 kind: Cow::Borrowed(v1_stop_kind(response.stop_reason)),
@@ -1198,7 +1201,7 @@ fn apply_setup(
 }
 
 fn apply_created(
-    created: &agent_client_protocol::schema::v1::NewSessionResponse,
+    created: &agent_client_protocol::v1::schema::NewSessionResponse,
     surface: &Arc<Mutex<Surface>>,
     bus: &Sender<AppEvent>,
     notice: Option<String>,
@@ -1485,7 +1488,8 @@ where
     // The transport owns the child process (or the socket) from here on, and
     // driving it is what keeps stderr captured and the process group killed on
     // exit — so it runs for the life of the connection, not just the probe.
-    let driver = tokio::spawn(driver);
+    // Passive endpoints (an already-accepted socket) own no driver.
+    let driver = driver.map(tokio::spawn);
     let outcome = async {
         let (negotiated, channel) = negotiate::probe(channel, SETUP_DEADLINE)
             .await
@@ -1506,7 +1510,9 @@ where
     // transport — and the transport holds the child guard: one leaked agent
     // process per `/harness`. Aborting drops the guard, which kills the process
     // group, the same way `check_blocking` cleans up after its probe.
-    driver.abort();
+    if let Some(driver) = driver {
+        driver.abort();
+    }
     outcome
 }
 
@@ -1788,8 +1794,7 @@ where
     let terms_kill = Arc::clone(&terms);
     let terms_release = Arc::clone(&terms);
 
-    Client
-        .builder()
+    Builder::new(Client)
         .name(env!("CARGO_PKG_NAME"))
         .on_receive_notification(
             {

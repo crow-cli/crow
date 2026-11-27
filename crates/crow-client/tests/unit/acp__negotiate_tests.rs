@@ -8,10 +8,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use agent_client_protocol::schema::v1::{RequestId, Response as RpcResponse};
+use agent_client_protocol::v1::schema::RequestId;
 use agent_client_protocol::{
-    Channel, RawJsonRpcMessage, RawJsonRpcParams, TransportBatch, TransportBatchEntry,
-    TransportFrame,
+    Channel, RawJsonRpcId, RawJsonRpcMessage, RawJsonRpcParams, RawJsonRpcResponse, TransportFrame,
 };
 use futures::StreamExt;
 use serde_json::{json, Value};
@@ -78,7 +77,7 @@ fn scripted_peer(
     let seen = Arc::new(Mutex::new(None));
     let recorded = Arc::clone(&seen);
     tokio::spawn(async move {
-        let Channel { mut rx, tx } = agent;
+        let (mut rx, tx) = agent.into_parts();
         while let Some(frame) = rx.next().await {
             if let Some(params) = initialize_params(&frame) {
                 *recorded.lock().unwrap() = Some(params);
@@ -192,34 +191,37 @@ async fn a_request_the_peer_opened_with_is_not_eaten_by_the_probe() {
         panic!("expected the peer's request, got {replayed:?}");
     };
     assert_eq!(inner.method.as_ref(), "fs/read_text_file");
-    assert_eq!(inner.id, RequestId::Number(7));
+    assert_eq!(inner.id, RawJsonRpcId::from(RequestId::Number(7)));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_answer_batched_with_other_traffic_is_split_not_dropped() {
-    let batch = TransportBatch::from_entries(vec![
-        TransportBatchEntry::message(
-            RawJsonRpcMessage::notification(
-                "session/update".into(),
-                json!({ "sessionId": "s", "update": { "sessionUpdate": "agent_message_chunk" } }),
-            )
-            .unwrap(),
-        ),
-        TransportBatchEntry::message(RawJsonRpcMessage::response(
-            RequestId::Number(0),
-            Ok(v2_answer()),
-        )),
-    ])
-    .map(TransportFrame::Batch)
-    .expect("a batch of two is a batch");
-    let (client, _seen) = scripted_peer(vec![batch], true);
+    // Since 5.x the SDK does not parse JSON-RPC batches at all (v2 forbids
+    // them), so a v1 peer's batch arrives as `Malformed` raw text. The probe
+    // cracks it open by hand; the entries it did not consume must reach the
+    // adopter verbatim, still as raw text.
+    let batch = json!([
+        {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": { "sessionId": "s", "update": { "sessionUpdate": "agent_message_chunk" } }
+        },
+        { "jsonrpc": "2.0", "id": 0, "result": v2_answer() },
+    ]);
+    let frame = TransportFrame::Malformed {
+        raw: batch.to_string(),
+        error: agent_client_protocol::Error::new(-32600, "batch"),
+    };
+    let (client, _seen) = scripted_peer(vec![frame], true);
     let (negotiated, mut channel) = probe(client, Duration::from_secs(5)).await.unwrap();
     assert!(matches!(negotiated.protocol, Protocol::V2));
     let leftover = channel.rx.next().await.expect("the rest of the batch is replayed");
-    let TransportFrame::Batch(rest) = leftover else {
-        panic!("expected the leftover batch, got {leftover:?}");
+    let TransportFrame::Malformed { raw, .. } = leftover else {
+        panic!("expected the leftover batch as raw text, got {leftover:?}");
     };
+    let rest: Vec<Value> = serde_json::from_str(&raw).unwrap();
     assert_eq!(rest.len(), 1, "only the answer was consumed");
+    assert_eq!(rest[0]["method"], "session/update");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -305,15 +307,16 @@ fn the_probe_reuses_id_zero_and_the_stack_may_reuse_it_too() {
     assert_eq!(value["method"].as_str(), Some("initialize"));
     // The response id must match, or the probe would never recognize its own
     // answer and would wait out the deadline against a healthy agent.
-    let reply = RawJsonRpcMessage::response(RequestId::Number(0), Ok(v2_answer()));
-    assert_eq!(reply.response_id(), Some(&RequestId::Number(0)));
-    let RpcResponse::Result { id, .. } = reply_as_response(&reply) else {
+    let reply = RawJsonRpcMessage::response(super::PROBE_ID, Ok(v2_answer()));
+    let probe_id = RawJsonRpcId::from(super::PROBE_ID);
+    assert_eq!(reply.response_id(), Some(&probe_id));
+    let RawJsonRpcResponse::Result { id, .. } = reply_as_response(&reply) else {
         panic!("a response is a response");
     };
-    assert_eq!(id, &RequestId::Number(0));
+    assert_eq!(id, &probe_id);
 }
 
-fn reply_as_response(frame: &RawJsonRpcMessage) -> &RpcResponse<Value> {
+fn reply_as_response(frame: &RawJsonRpcMessage) -> &RawJsonRpcResponse {
     match frame {
         RawJsonRpcMessage::Response(response) => response,
         _ => panic!("not a response"),

@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     CreateElicitationRequest, ElicitationMode, ElicitationPropertySchema, MultiSelectItems,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -561,7 +561,7 @@ impl ElicitationFormState {
 }
 
 fn string_options(
-    schema: &agent_client_protocol::schema::v1::StringPropertySchema,
+    schema: &agent_client_protocol::v1::schema::StringPropertySchema,
 ) -> Vec<ElicitationOption> {
     if let Some(options) = &schema.one_of {
         return options

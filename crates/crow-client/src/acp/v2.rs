@@ -28,13 +28,15 @@ use std::sync::{Arc, Mutex};
 // helper (`resolve_cmd_session`, `bind_session`, `emit_session_bound`,
 // `Surface`) speaks it. It is a string newtype, so the v2 wire calls convert at
 // the boundary rather than the whole stack growing a second id type.
-use agent_client_protocol::schema::v1::SessionId;
-use agent_client_protocol::schema::v2::{
-    self, ContentBlock, ImageContent, PermissionOptionKind, RequestPermissionOutcome,
-    RequestPermissionResponse, ResourceLink, SelectedPermissionOutcome, TextContent,
+use agent_client_protocol::v1::schema::SessionId;
+use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::v2::schema::{
+    CancelledPermissionOutcome, ContentBlock, ImageContent, PermissionOptionKind,
+    RequestPermissionOutcome, RequestPermissionResponse, ResourceLink,
+    SelectedPermissionOutcome, TextContent,
 };
 use agent_client_protocol::{
-    on_receive_notification, on_receive_request, Agent, Channel, Client, ConnectionTo,
+    on_receive_notification, on_receive_request, Agent, Builder, Channel, Client, ConnectionTo,
     Error as AcpError, Handled, UntypedMessage,
 };
 use serde_json::{json, Value};
@@ -155,10 +157,13 @@ fn stop_kind(reason: &v2::StopReason) -> Cow<'static, str> {
         v2::StopReason::MaxTurnRequests => Cow::Borrowed("max-turn-requests"),
         v2::StopReason::Refusal => Cow::Borrowed("blocked"),
         v2::StopReason::Cancelled => Cow::Borrowed("interrupted"),
-        // agent2 sends `stopReason: "error"`; the spec's union is longer than
-        // this match, and a reason that renders as "unknown" is a reason the
-        // user cannot act on.
-        v2::StopReason::Other(reason) => Cow::Owned(reason.clone()),
+        // beta.4 gave `error` its own arm (with an optional JSON-RPC error
+        // object); alpha.7 agents send the bare word, which flattens into the
+        // same arm. Either way the user sees "error", not "unknown".
+        v2::StopReason::Error(_) => Cow::Borrowed("error"),
+        // The spec's union is longer than this match, and a reason that
+        // renders as "unknown" is a reason the user cannot act on.
+        v2::StopReason::Other(reason) => Cow::Owned(reason.stop_reason.clone()),
         _ => Cow::Borrowed("unknown"),
     }
 }
@@ -730,31 +735,28 @@ pub(super) async fn connect(
     let surface_u = Arc::clone(&surface);
     let bus_p = bus.clone();
 
-    Client
-        .builder()
-        // Not `Client::v2()`, and the reason is the handshake. SDK 2.2 put the
-        // v2 builder on a connection that enforces an `initialize` round trip it
-        // can *see*, and crow's is invisible to it: `negotiate::probe` sends the
-        // one union `initialize` as a raw transport frame before any connection
-        // exists, then hands the already-initialized channel to whichever stack
-        // won. Under `Client::v2()` the connection stays `Uninitialized` forever
-        // and every later request dies with "ACP initialization must complete
+    Builder::new(Client)
+        // Not `Client.v2()`, and the reason is the handshake. The versioned
+        // entry points enforce an `initialize` round trip they can *see*, and
+        // crow's is invisible to them: `negotiate::probe` sends the one union
+        // `initialize` as a raw transport frame before any connection exists,
+        // then hands the already-initialized channel to whichever stack won.
+        // Under `Client.v2()` the connection stays `Uninitialized` forever and
+        // every later request dies with "ACP initialization must complete
         // before `session/new` can be used".
         //
-        // `without_acp_version_guard` is the SDK's own escape hatch for precisely
-        // this consumer — "protocol-routing infrastructure that inspects and
-        // validates raw initialize requests and responses itself before
-        // selecting a version-specific implementation" — and it is deliberately
-        // offered only on builders whose callbacks receive a raw `ConnectionTo`.
-        // That is the second reason to be here: it keeps v1 and v2 on ONE
-        // connection type, so `control::run_version_neutral` stays a single
-        // dispatcher instead of growing a `V2ConnectionTo` twin.
+        // Since 5.0 `Builder::new` IS the unguarded builder — the old
+        // `Client.builder().without_acp_version_guard()` spelling is gone — for
+        // precisely this consumer: protocol-routing infrastructure that
+        // validates raw initialize itself before selecting an implementation.
+        // Its callbacks receive the version-neutral `ConnectionTo`, which keeps
+        // v1 and v2 on ONE connection type, so `control::run_version_neutral`
+        // stays a single dispatcher instead of growing a v2 twin.
         //
         // What is given up is version *tracking*, not v2: the guard only stamps
         // and checks `protocolVersion`. The v2 typed requests below are ordinary
         // JSON-RPC payloads and crow does its own version validation in
         // `negotiate::classify`, which is where the union probe already lives.
-        .without_acp_version_guard()
         .name(env!("CARGO_PKG_NAME"))
         // One untyped handler for every notification. `session/update` is
         // forwarded as the RAW params, never a re-serialization of a typed
@@ -791,7 +793,7 @@ pub(super) async fn connect(
                                                 || Cow::Borrowed("completed"),
                                                 stop_kind,
                                             ),
-                                            usage: idle.usage.as_ref().map(turn_usage),
+                                            usage: idle.usage.as_deref().map(turn_usage),
                                         };
                                         board_lock(&board_n).settle(&session, outcome);
                                     }
@@ -896,7 +898,7 @@ pub(super) async fn connect(
                     .collect();
                 if permission_ask_empty_outcome(&options).is_some() {
                     return responder.respond(RequestPermissionResponse::new(
-                        RequestPermissionOutcome::Cancelled,
+                        RequestPermissionOutcome::Cancelled(CancelledPermissionOutcome::new()),
                     ));
                 }
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -910,7 +912,7 @@ pub(super) async fn connect(
                     .is_err()
                 {
                     return responder.respond(RequestPermissionResponse::new(
-                        RequestPermissionOutcome::Cancelled,
+                        RequestPermissionOutcome::Cancelled(CancelledPermissionOutcome::new()),
                     ));
                 }
                 // Wait off the dispatch loop so session/update still paints.
@@ -920,7 +922,9 @@ pub(super) async fn connect(
                         PermissionAskReply::Selected(id) => {
                             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id))
                         }
-                        PermissionAskReply::Cancelled => RequestPermissionOutcome::Cancelled,
+                        PermissionAskReply::Cancelled => {
+                            RequestPermissionOutcome::Cancelled(CancelledPermissionOutcome::new())
+                        }
                     };
                     let _ = responder.respond(RequestPermissionResponse::new(outcome));
                 });

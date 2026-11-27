@@ -205,7 +205,7 @@ fn plan_review_elicitation_renders_markdown_and_scrolls() {
         .map(|i| format!("- [{}] step {i:02}", if i == 0 { 'x' } else { ' ' }))
         .collect::<Vec<_>>()
         .join("\n");
-    let request: agent_client_protocol::schema::v1::CreateElicitationRequest =
+    let request: agent_client_protocol::v1::schema::CreateElicitationRequest =
             serde_json::from_value(serde_json::json!({
                 "mode": "form",
                 "sessionId": "s1",

@@ -12,7 +12,8 @@ use std::process::Stdio;
 
 use serde_json::{json, Map, Value};
 
-use agent_client_protocol::schema::v1::{Error as AcpError, ErrorCode, Meta};
+use agent_client_protocol::v1::schema::Meta;
+use agent_client_protocol::Error as SdkError;
 
 pub const ACP_AUTH_REQUIRED_CODE: i32 = -32000;
 
@@ -325,8 +326,12 @@ pub fn values_from_auth_arg(method: &AuthMethodInfo, arg: &str) -> BTreeMap<Stri
     values
 }
 
-pub fn is_auth_required_error(err: &AcpError) -> bool {
-    if err.code == ErrorCode::AuthRequired || i32::from(err.code) == ACP_AUTH_REQUIRED_CODE {
+/// Takes the SDK's version-neutral error: since 5.x every connection method
+/// and callback returns it, and a v1 schema error converts in losslessly.
+pub fn is_auth_required_error(err: &SdkError) -> bool {
+    if err.code == agent_client_protocol::ErrorCode::AUTH_REQUIRED
+        || i32::from(err.code) == ACP_AUTH_REQUIRED_CODE
+    {
         return true;
     }
     if err.data.as_ref().and_then(|data| data.get("errorKind")).and_then(Value::as_str)
@@ -337,7 +342,7 @@ pub fn is_auth_required_error(err: &AcpError) -> bool {
     is_auth_failure_message(&acp_error_message(err))
 }
 
-pub fn acp_error_message(err: &AcpError) -> String {
+pub fn acp_error_message(err: &SdkError) -> String {
     if let Some(data) = &err.data {
         if let Some(details) = data.get("details").and_then(Value::as_str) {
             if !details.is_empty() {

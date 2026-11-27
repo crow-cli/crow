@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use agent_client_protocol::schema::v1::TerminalExitStatus;
+use agent_client_protocol::v1::schema::TerminalExitStatus;
 use tokio::sync::Notify;
 
 const DEFAULT_BYTE_LIMIT: usize = 1_048_576;
