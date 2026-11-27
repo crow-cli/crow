@@ -141,6 +141,11 @@
     "configuration": {
       "title": "Crow ACP",
       "properties": {
+        "crowAcp.server": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Paste-able server entry, like an MCP server config. When non-empty it overrides the individual `crowAcp.*` settings field by field; they remain the fallback. Applies on window reload.\n\nSpawn a daemon: `{\"command\": \"crow-cli\", \"args\": [], \"model\": \"\", \"port\": 2771, \"cwd\": \"\", \"mcpServers\": {\"crow-mcp\": {\"transport\": \"stdio\", \"command\": \"crow-cli\", \"args\": [\"mcp2\"]}}}` — `command` + `args` run crow-cli (e.g. `\"command\": \"uv\", \"args\": [\"--project\", \"/path/to/crow-cli\", \"run\", \"crow-cli\"]` for a source checkout).\n\nProxy an existing daemon: `{\"endpoint\": \"ws://127.0.0.1:2771/acp\"}`."
+        },
         "crowAcp.backend": {
           "type": "string",
           "enum": ["spawn", "external"],

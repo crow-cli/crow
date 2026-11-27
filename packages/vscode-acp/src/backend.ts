@@ -35,6 +35,9 @@ export type BackendOptions = {
    * "0.0.0.0" when the chat webview runs on another machine (serve-web); the
    * proxy then requires its capability token on every request. */
   listenHost?: string;
+  /** A malformed crowAcp.server entry: start fails with this message instead
+   * of spawning a daemon from settings the user did not intend. */
+  configError?: string;
 };
 
 export type ClientBridge = {
@@ -47,6 +50,70 @@ export type ClientBridge = {
    * the same path a typed message takes. */
   send(sessionId: string, prompt: unknown): Promise<void>;
 };
+
+/**
+ * The paste-able `crowAcp.server` entry, MCP-server style. A non-empty entry
+ * overrides the individual crowAcp.* settings field by field; absent fields
+ * keep the legacy setting. `endpoint` selects external (proxy an existing
+ * daemon); otherwise the entry spawns: `command` + `args` run crow-cli,
+ * `model`/`port` feed the daemon argv, `cwd`/`mcpServers` feed the webview.
+ * Malformed entries yield `configError`, which fails backend start with the
+ * message instead of silently spawning the wrong daemon.
+ */
+export type ServerOverride = {
+  external?: string;
+  cliCommand?: string[];
+  firstPort?: number;
+  extraArgs?: string[];
+  cwd?: string;
+  mcpConfig?: string;
+  configError?: string;
+};
+
+export function resolveServerEntry(raw: unknown): ServerOverride {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw))
+    return { configError: "crowAcp.server must be a JSON object" };
+  const entry = raw as Record<string, unknown>;
+  if (Object.keys(entry).length === 0) return {};
+  const bad = (msg: string): ServerOverride => ({ configError: `crowAcp.server: ${msg}` });
+
+  if ("endpoint" in entry) {
+    if (typeof entry.endpoint !== "string" || !entry.endpoint)
+      return bad("endpoint must be a non-empty string");
+    return { external: entry.endpoint };
+  }
+
+  const out: ServerOverride = {};
+  if ("command" in entry) {
+    if (typeof entry.command !== "string" || !entry.command)
+      return bad("command must be a non-empty string");
+    if (entry.args !== undefined && (!Array.isArray(entry.args) || entry.args.some((a) => typeof a !== "string")))
+      return bad("args must be an array of strings");
+    out.cliCommand = [entry.command, ...((entry.args as string[] | undefined) ?? [])];
+  } else if (entry.args !== undefined) {
+    return bad("args needs a command");
+  }
+  if ("model" in entry) {
+    if (typeof entry.model !== "string") return bad("model must be a string");
+    if (entry.model) out.extraArgs = ["--model", entry.model];
+  }
+  if ("port" in entry) {
+    if (typeof entry.port !== "number" || !Number.isInteger(entry.port) || entry.port <= 0 || entry.port > 65535)
+      return bad("port must be an integer in 1..65535");
+    out.firstPort = entry.port;
+  }
+  if ("cwd" in entry) {
+    if (typeof entry.cwd !== "string") return bad("cwd must be a string");
+    if (entry.cwd) out.cwd = entry.cwd;
+  }
+  if ("mcpServers" in entry) {
+    if (typeof entry.mcpServers !== "object" || entry.mcpServers === null || Array.isArray(entry.mcpServers))
+      return bad("mcpServers must be a name-to-server mapping");
+    out.mcpConfig = JSON.stringify(entry.mcpServers);
+  }
+  return out;
+}
 
 class Emitter<T> {
   private listeners = new Set<(value: T) => void>();
@@ -242,6 +309,7 @@ export class Backend {
   }
 
   private async doStart(): Promise<string> {
+    if (this.opts.configError) throw new Error(this.opts.configError);
     this.upstreamUrl = this.opts.external ?? (await this.spawnDaemon());
     if (this.disposed) throw new Error("backend disposed during startup");
     if (this.opts.external) {

@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { Backend, type ClientBridge } from "./backend.js";
+import { Backend, resolveServerEntry, type ClientBridge } from "./backend.js";
 
 /**
  * A short content hash for a webview asset. The webview's service worker caches
@@ -181,12 +181,17 @@ export function activate(context: vscode.ExtensionContext) {
     },
   };
 
+  // The paste-able crowAcp.server entry wins field by field; the individual
+  // settings above remain the fallback. Captured at activation like the rest
+  // of the backend options — applies on window reload.
+  const serverOverride = resolveServerEntry(startupConfig.get("server"));
   const backend = new Backend({
     log: (line) => output.appendLine(line),
-    cliCommand: startupConfig.get<string[]>("cliCommand") ?? ["crow-cli"],
-    firstPort: startupConfig.get<number>("port") ?? 2771,
-    external: startupConfig.get<string>("backend") === "external" ? startupConfig.get<string>("endpoint") : undefined,
-    extraArgs: startupConfig.get<string>("model") ? ["--model", startupConfig.get<string>("model")!] : undefined,
+    cliCommand: serverOverride.cliCommand ?? startupConfig.get<string[]>("cliCommand") ?? ["crow-cli"],
+    firstPort: serverOverride.firstPort ?? startupConfig.get<number>("port") ?? 2771,
+    external: serverOverride.external ?? (startupConfig.get<string>("backend") === "external" ? startupConfig.get<string>("endpoint") : undefined),
+    extraArgs: serverOverride.extraArgs ?? (startupConfig.get<string>("model") ? ["--model", startupConfig.get<string>("model")!] : undefined),
+    configError: serverOverride.configError,
     clientBridge,
     // serve-web: the webview runs in the user's browser, not on this machine —
     // the proxy must be reachable over the network (token-gated in Backend).
@@ -197,7 +202,7 @@ export function activate(context: vscode.ExtensionContext) {
     const folder = vscode.window.activeTextEditor
       ? vscode.workspace.getWorkspaceFolder(vscode.window.activeTextEditor.document.uri)
       : undefined;
-    const cwd = config.get<string>("cwd") || (folder ?? vscode.workspace.workspaceFolders?.[0])?.uri.fsPath;
+    const cwd = serverOverride.cwd || config.get<string>("cwd") || (folder ?? vscode.workspace.workspaceFolders?.[0])?.uri.fsPath;
     if (!cwd) {
       webview.html = '<html><body><p>Open a workspace folder or set <code>crowAcp.cwd</code> to use Crow ACP Chat.</p></body></html>';
       return;
@@ -220,7 +225,7 @@ export function activate(context: vscode.ExtensionContext) {
       endpoint,
       cwd,
       protocol: config.get<string>("protocol"),
-      mcpConfig: config.get<string>("mcpConfig"),
+      mcpConfig: serverOverride.mcpConfig ?? config.get<string>("mcpConfig"),
       mcpEndpoint: backend.mcpEndpoint,
       attach: panelAttach.get(webview),
     }).replace(/</g, "\\u003c");
